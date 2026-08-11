@@ -59,11 +59,12 @@ func (s *Store) FetchUnprocessedPosts(ctx context.Context, limit int) ([]*RawPos
 	return posts, nil
 }
 
-// FetchRecentEventCandidates retrieves active news_events and their source posts within the time window.
+// FetchRecentEventCandidates retrieves active news_events and their source posts within the time window,
+// including their embedding centroids.
 func (s *Store) FetchRecentEventCandidates(ctx context.Context, window time.Duration) ([]*EventCandidate, error) {
 	windowInterval := fmt.Sprintf("%d seconds", int(window.Seconds()))
 	eventQuery := `
-		SELECT id, canonical_title, first_seen_at, last_updated_at
+		SELECT id, canonical_title, first_seen_at, last_updated_at, COALESCE(embedding_centroid::text, '')
 		FROM news_events
 		WHERE status = 'active' AND last_updated_at >= NOW() - $1::interval
 		ORDER BY last_updated_at DESC
@@ -80,8 +81,15 @@ func (s *Store) FetchRecentEventCandidates(ctx context.Context, window time.Dura
 
 	for rows.Next() {
 		c := &EventCandidate{Sources: []EventSourceMember{}}
-		if err := rows.Scan(&c.EventID, &c.CanonicalTitle, &c.FirstSeenAt, &c.LastUpdatedAt); err != nil {
+		var centroidStr string
+		if err := rows.Scan(&c.EventID, &c.CanonicalTitle, &c.FirstSeenAt, &c.LastUpdatedAt, &centroidStr); err != nil {
 			return nil, fmt.Errorf("scan recent event: %w", err)
+		}
+		if centroidStr != "" {
+			vec, err := ParsePgVector(centroidStr)
+			if err == nil {
+				c.EmbeddingCentroid = vec
+			}
 		}
 		candidates = append(candidates, c)
 		eventIDs = append(eventIDs, c.EventID)
@@ -126,12 +134,14 @@ func (s *Store) FetchRecentEventCandidates(ctx context.Context, window time.Dura
 }
 
 // CreateEvent atomically creates a news_events row, links the founding raw_post in event_sources,
-// and updates the raw_post with normalized_text, simhash, and processing_status = 'processed'.
+// sets the initial embedding centroid, and updates the raw_post with normalized_text, simhash, embedding,
+// and processing_status = 'processed'.
 func (s *Store) CreateEvent(
 	ctx context.Context,
 	post *RawPost,
 	simhash int64,
 	normalizedText string,
+	embedding []float32,
 	canonicalTitle string,
 ) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -141,12 +151,17 @@ func (s *Store) CreateEvent(
 	defer tx.Rollback() // nolint:errcheck
 
 	var eventID int64
+	var vecParam sql.NullString
+	if len(embedding) > 0 {
+		vecParam = sql.NullString{String: FormatPgVector(embedding), Valid: true}
+	}
+
 	eventQuery := `
-		INSERT INTO news_events (canonical_title, status, first_seen_at, last_updated_at, source_count)
-		VALUES ($1, 'active', $2, $2, 1)
+		INSERT INTO news_events (canonical_title, status, first_seen_at, last_updated_at, source_count, embedding_centroid)
+		VALUES ($1, 'active', $2, $2, 1, $3::vector)
 		RETURNING id
 	`
-	if err := tx.QueryRowContext(ctx, eventQuery, canonicalTitle, post.PostedAt).Scan(&eventID); err != nil {
+	if err := tx.QueryRowContext(ctx, eventQuery, canonicalTitle, post.PostedAt, vecParam).Scan(&eventID); err != nil {
 		return 0, fmt.Errorf("insert news_events: %w", err)
 	}
 
@@ -160,10 +175,10 @@ func (s *Store) CreateEvent(
 
 	updatePostQuery := `
 		UPDATE raw_posts
-		SET normalized_text = $1, simhash = $2, processing_status = 'processed'
-		WHERE id = $3
+		SET normalized_text = $1, simhash = $2, embedding = $3::vector, processing_status = 'processed'
+		WHERE id = $4
 	`
-	if _, err := tx.ExecContext(ctx, updatePostQuery, normalizedText, simhash, post.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, updatePostQuery, normalizedText, simhash, vecParam, post.ID); err != nil {
 		return 0, fmt.Errorf("update raw_posts: %w", err)
 	}
 
@@ -175,13 +190,14 @@ func (s *Store) CreateEvent(
 }
 
 // AttachToEvent atomically links a raw_post to an existing news_event, increments source_count,
-// updates last_updated_at, and marks the raw_post as processed.
+// updates last_updated_at, recomputes the centroid vector from attached posts, and marks the raw_post as processed.
 func (s *Store) AttachToEvent(
 	ctx context.Context,
 	eventID int64,
 	post *RawPost,
 	simhash int64,
 	normalizedText string,
+	embedding []float32,
 	similarityScore int,
 ) error {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -199,28 +215,67 @@ func (s *Store) AttachToEvent(
 		return fmt.Errorf("insert event_sources: %w", err)
 	}
 
+	var vecParam sql.NullString
+	if len(embedding) > 0 {
+		vecParam = sql.NullString{String: FormatPgVector(embedding), Valid: true}
+	}
+
+	updatePostQuery := `
+		UPDATE raw_posts
+		SET normalized_text = $1, simhash = $2, embedding = $3::vector, processing_status = 'processed'
+		WHERE id = $4
+	`
+	if _, err := tx.ExecContext(ctx, updatePostQuery, normalizedText, simhash, vecParam, post.ID); err != nil {
+		return fmt.Errorf("update raw_posts: %w", err)
+	}
+
+	// Recompute embedding centroid and update news_events transactionally
 	updateEventQuery := `
 		UPDATE news_events
 		SET source_count = (SELECT COUNT(*) FROM event_sources WHERE event_id = $1),
-		    last_updated_at = GREATEST(last_updated_at, $2)
+		    last_updated_at = GREATEST(last_updated_at, $2),
+		    embedding_centroid = COALESCE(
+		        (SELECT avg(rp.embedding)::vector 
+		         FROM event_sources es 
+		         JOIN raw_posts rp ON es.raw_post_id = rp.id 
+		         WHERE es.event_id = $1 AND rp.embedding IS NOT NULL),
+		        embedding_centroid
+		    )
 		WHERE id = $1
 	`
 	if _, err := tx.ExecContext(ctx, updateEventQuery, eventID, post.PostedAt); err != nil {
 		return fmt.Errorf("update news_events: %w", err)
 	}
 
-	updatePostQuery := `
-		UPDATE raw_posts
-		SET normalized_text = $1, simhash = $2, processing_status = 'processed'
-		WHERE id = $3
-	`
-	if _, err := tx.ExecContext(ctx, updatePostQuery, normalizedText, simhash, post.ID); err != nil {
-		return fmt.Errorf("update raw_posts: %w", err)
-	}
-
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit tx: %w", err)
 	}
 
+	return nil
+}
+
+// MarkPostNeedsReview updates a raw_post's normalized text, simhash, embedding,
+// and sets processing_status = 'needs_review' without attaching or creating an event.
+func (s *Store) MarkPostNeedsReview(
+	ctx context.Context,
+	postID int64,
+	simhash int64,
+	normalizedText string,
+	embedding []float32,
+) error {
+	var vecParam sql.NullString
+	if len(embedding) > 0 {
+		vecParam = sql.NullString{String: FormatPgVector(embedding), Valid: true}
+	}
+
+	query := `
+		UPDATE raw_posts
+		SET normalized_text = $1, simhash = $2, embedding = $3::vector, processing_status = 'needs_review'
+		WHERE id = $4
+	`
+	_, err := s.db.ExecContext(ctx, query, normalizedText, simhash, vecParam, postID)
+	if err != nil {
+		return fmt.Errorf("mark post needs_review: %w", err)
+	}
 	return nil
 }

@@ -45,6 +45,10 @@ services:
     restart: unless-stopped
     environment:
       APP_DATABASE_URL: postgres://${APP_DB_USER:-efi_app}:${APP_DB_PASSWORD:-efi_app_pass}@postgres:5432/${POSTGRES_DB:-efi_dev}?sslmode=disable
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      EMBEDDING_HIGH_THRESHOLD: ${EMBEDDING_HIGH_THRESHOLD:-0.82}
+      EMBEDDING_LOW_THRESHOLD: ${EMBEDDING_LOW_THRESHOLD:-0.65}
+      MAX_EMBEDDING_RETRIES: ${MAX_EMBEDDING_RETRIES:-3}
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-2}
       BATCH_SIZE: ${BATCH_SIZE:-50}
       SIMHASH_THRESHOLD: ${SIMHASH_THRESHOLD:-10}
@@ -58,4 +62,3 @@ services:
 volumes:
   postgres_data:
     driver: local
-

@@ -33,6 +33,9 @@ Never invent architectural decisions independently. If requirements are ambiguou
   - **ADR-0002**: Server-Sent Events (SSE) over WebSockets for real-time delivery.
   - **ADR-0003**: `pgvector` inside PostgreSQL over a dedicated vector database.
   - **ADR-0004**: Python + Telethon for Telegram ingestion listener; Go for pipeline processing and API services.
+  - **ADR-0005**: Telegram session storage in environment variable.
+  - **ADR-0006**: Non-semantic text-similarity clustering at V2.
+  - **ADR-0007**: Google Gemini `text-embedding-004` (768-d) for semantic clustering.
 
 ---
 
@@ -125,4 +128,17 @@ If you encounter:
   - The processor writes and updates `news_events` and `event_sources` in atomic database transactions.
 - **Structured Logging & Decision Auditing**: All batch runs and clustering decisions must emit structured JSON logs containing `timestamp`, `level`, `service: "processor"`, `correlation_id`, `raw_post_id`, `event_id`, and `decision` (`created_new_event` or `attached_to_event`).
 
+---
 
+## 12. V3 Addendum — Semantic Clustering & Vector Embeddings
+
+- **Embedding Provider Seam (ADR-0007)**: All embedding generation is decoupled behind the `Embedder` Go interface in `embed.go`. Direct embedding HTTP requests from outside this interface are prohibited.
+- **Three-Way Decision State Machine**:
+  - **Fast Path (Simhash)**: If Hamming distance <= `SIMHASH_THRESHOLD` (10), post attaches immediately.
+  - **Fallback Path (Embeddings)**:
+    - Cosine similarity >= `EMBEDDING_HIGH_THRESHOLD` (0.82) -> `attached_to_event`
+    - Cosine similarity < `EMBEDDING_LOW_THRESHOLD` (0.65) -> `created_new_event`
+    - Ambiguous band (`0.65 <= similarity < 0.82`) -> `needs_review` (no event created, not attached)
+- **Centroid Maintenance**: `news_events.embedding_centroid` must be updated atomically on event creation and every subsequent post attachment using PostgreSQL vector aggregation.
+- **Provider Resilience**: External embedding API failures must be retried with exponential backoff up to `MAX_EMBEDDING_RETRIES`. If retries are exhausted, the post transitions to `needs_review` to prevent pipeline stall and guarantee zero data loss.
+- **V4 Boundary**: V3 is strictly limited to vector embedding generation, centroid maintenance, and semantic clustering. No AI enrichment models (LLM summary generation, entity extraction, category classification, or sentiment analysis) may be added until V4.

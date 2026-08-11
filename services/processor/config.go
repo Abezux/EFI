@@ -9,13 +9,17 @@ import (
 
 // Config encapsulates configuration parameters for the processor service.
 type Config struct {
-	DatabaseURL      string
-	PollInterval     time.Duration
-	BatchSize        int
-	SimhashThreshold int
-	ClusteringWindow time.Duration
-	LogLevel         string
-	Environment      string
+	DatabaseURL            string
+	PollInterval           time.Duration
+	BatchSize              int
+	SimhashThreshold       int
+	ClusteringWindow       time.Duration
+	GeminiAPIKey           string
+	EmbeddingHighThreshold float64
+	EmbeddingLowThreshold  float64
+	MaxEmbeddingRetries    int
+	LogLevel               string
+	Environment            string
 }
 
 // LoadConfig reads configuration from environment variables with sensible defaults.
@@ -58,6 +62,34 @@ func LoadConfig() (*Config, error) {
 		}
 	}
 
+	geminiAPIKey := os.Getenv("GEMINI_API_KEY")
+	if geminiAPIKey == "" {
+		geminiAPIKey = os.Getenv("EMBEDDING_API_KEY")
+	}
+
+	// High cosine similarity threshold for auto-attaching events (default 0.82)
+	embeddingHighThreshold := 0.82
+	if val := os.Getenv("EMBEDDING_HIGH_THRESHOLD"); val != "" {
+		if f, err := strconv.ParseFloat(val, 64); err == nil && f > 0.0 && f <= 1.0 {
+			embeddingHighThreshold = f
+		}
+	}
+
+	// Low cosine similarity threshold below which a new event is created (default 0.65)
+	embeddingLowThreshold := 0.65
+	if val := os.Getenv("EMBEDDING_LOW_THRESHOLD"); val != "" {
+		if f, err := strconv.ParseFloat(val, 64); err == nil && f > 0.0 && f <= 1.0 {
+			embeddingLowThreshold = f
+		}
+	}
+
+	maxEmbeddingRetries := 3
+	if val := os.Getenv("MAX_EMBEDDING_RETRIES"); val != "" {
+		if r, err := strconv.Atoi(val); err == nil && r >= 0 {
+			maxEmbeddingRetries = r
+		}
+	}
+
 	logLevel := os.Getenv("LOG_LEVEL")
 	if logLevel == "" {
 		logLevel = "INFO"
@@ -69,12 +101,16 @@ func LoadConfig() (*Config, error) {
 	}
 
 	return &Config{
-		DatabaseURL:      dbURL,
-		PollInterval:     pollInterval,
-		BatchSize:        batchSize,
-		SimhashThreshold: simhashThreshold,
-		ClusteringWindow: clusteringWindow,
-		LogLevel:         logLevel,
-		Environment:      env,
+		DatabaseURL:            dbURL,
+		PollInterval:           pollInterval,
+		BatchSize:              batchSize,
+		SimhashThreshold:       simhashThreshold,
+		ClusteringWindow:       clusteringWindow,
+		GeminiAPIKey:           geminiAPIKey,
+		EmbeddingHighThreshold: embeddingHighThreshold,
+		EmbeddingLowThreshold:  embeddingLowThreshold,
+		MaxEmbeddingRetries:    maxEmbeddingRetries,
+		LogLevel:               logLevel,
+		Environment:            env,
 	}, nil
 }

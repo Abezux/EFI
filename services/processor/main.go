@@ -51,7 +51,45 @@ func logJSON(level, message, correlationID string, extra map[string]any) {
 	}
 }
 
-func processBatch(ctx context.Context, store *Store, config *Config) (int, error) {
+// generateEmbeddingWithRetry attempts to generate an embedding up to maxRetries times.
+func generateEmbeddingWithRetry(ctx context.Context, embedder Embedder, text string, maxRetries int, corrID string) ([]float32, error) {
+	if embedder == nil {
+		return nil, fmt.Errorf("no embedder configured")
+	}
+
+	var lastErr error
+	startTime := time.Now()
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		vec, err := embedder.Embed(ctx, text)
+		latency := time.Since(startTime).Milliseconds()
+
+		if err == nil {
+			logJSON("DEBUG", "Embedding generated successfully", corrID, map[string]any{
+				"attempt":    attempt,
+				"latency_ms": latency,
+				"dimensions": len(vec),
+			})
+			return vec, nil
+		}
+
+		lastErr = err
+		logJSON("WARN", fmt.Sprintf("Embedding attempt %d/%d failed: %v", attempt, maxRetries, err), corrID, map[string]any{
+			"attempt":    attempt,
+			"latency_ms": latency,
+		})
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(attempt*150) * time.Millisecond):
+		}
+	}
+
+	return nil, fmt.Errorf("exhausted %d embedding retries: %w", maxRetries, lastErr)
+}
+
+func processBatch(ctx context.Context, store *Store, embedder Embedder, config *Config) (int, error) {
 	posts, err := store.FetchUnprocessedPosts(ctx, config.BatchSize)
 	if err != nil {
 		return 0, fmt.Errorf("fetch unprocessed posts: %w", err)
@@ -79,13 +117,35 @@ func processBatch(ctx context.Context, store *Store, config *Config) (int, error
 			continue
 		}
 
-		// 4. Determine clustering decision (attach or create new)
-		decision := DecideClustering(post.ID, normalized, simhash, candidates, config.SimhashThreshold)
+		// 4. Check Fast-Path (Simhash match)
+		// If simhash matches within threshold, we can attach immediately without blocking on embedding.
+		// However, we still attempt embedding generation to keep the centroid vector updated.
+		var embedding []float32
+		if embedder != nil && config.GeminiAPIKey != "" {
+			emb, embErr := generateEmbeddingWithRetry(ctx, embedder, normalized, config.MaxEmbeddingRetries, corrID)
+			if embErr == nil {
+				embedding = emb
+			} else {
+				logJSON("WARN", fmt.Sprintf("Failed to generate embedding for post %d: %v", post.ID, embErr), corrID, map[string]any{"raw_post_id": post.ID})
+			}
+		}
 
-		// 5. Execute DB write transaction
+		// 5. Evaluate three-way clustering decision
+		decision := DecideClustering(
+			post.ID,
+			normalized,
+			simhash,
+			embedding,
+			candidates,
+			config.SimhashThreshold,
+			config.EmbeddingHighThreshold,
+			config.EmbeddingLowThreshold,
+		)
+
+		// 6. Execute DB write transaction according to decision
 		switch decision.Type {
 		case DecisionCreateNew:
-			eventID, err := store.CreateEvent(ctx, post, simhash, normalized, decision.CanonicalTitle)
+			eventID, err := store.CreateEvent(ctx, post, simhash, normalized, embedding, decision.CanonicalTitle)
 			if err != nil {
 				logJSON("ERROR", fmt.Sprintf("Failed to create event for post %d: %v", post.ID, err), corrID, map[string]any{"raw_post_id": post.ID})
 				continue
@@ -94,11 +154,12 @@ func processBatch(ctx context.Context, store *Store, config *Config) (int, error
 				"raw_post_id":     post.ID,
 				"event_id":        eventID,
 				"decision":        "created_new_event",
+				"match_reason":    decision.MatchReason,
 				"canonical_title": decision.CanonicalTitle,
 			})
 
 		case DecisionAttach:
-			err := store.AttachToEvent(ctx, decision.TargetEventID, post, simhash, normalized, decision.SimilarityScore)
+			err := store.AttachToEvent(ctx, decision.TargetEventID, post, simhash, normalized, embedding, decision.SimilarityScore)
 			if err != nil {
 				logJSON("ERROR", fmt.Sprintf("Failed to attach post %d to event %d: %v", post.ID, decision.TargetEventID, err), corrID, map[string]any{
 					"raw_post_id": post.ID,
@@ -110,7 +171,26 @@ func processBatch(ctx context.Context, store *Store, config *Config) (int, error
 				"raw_post_id":      post.ID,
 				"event_id":         decision.TargetEventID,
 				"decision":         "attached_to_event",
+				"match_reason":     decision.MatchReason,
 				"similarity_score": decision.SimilarityScore,
+				"cosine_score":     decision.CosineScore,
+			})
+
+		case DecisionNeedsReview:
+			err := store.MarkPostNeedsReview(ctx, post.ID, simhash, normalized, embedding)
+			if err != nil {
+				logJSON("ERROR", fmt.Sprintf("Failed to mark post %d as needs_review: %v", post.ID, err), corrID, map[string]any{
+					"raw_post_id": post.ID,
+				})
+				continue
+			}
+			logJSON("INFO", "Post routed to needs_review (ambiguous band)", corrID, map[string]any{
+				"raw_post_id":      post.ID,
+				"closest_event_id": decision.TargetEventID,
+				"decision":         "needs_review",
+				"match_reason":     decision.MatchReason,
+				"similarity_score": decision.SimilarityScore,
+				"cosine_score":     decision.CosineScore,
 			})
 		}
 
@@ -141,11 +221,20 @@ func main() {
 
 	store := NewStore(db)
 
-	logJSON("INFO", "V2 Processor service started", "", map[string]any{
-		"poll_interval_seconds": config.PollInterval.Seconds(),
-		"batch_size":            config.BatchSize,
-		"simhash_threshold":     config.SimhashThreshold,
-		"clustering_window_hrs": config.ClusteringWindow.Hours(),
+	var embedder Embedder
+	if config.GeminiAPIKey != "" {
+		embedder = NewGeminiEmbedder(config.GeminiAPIKey)
+	}
+
+	logJSON("INFO", "V3 Semantic Processor service started", "", map[string]any{
+		"poll_interval_seconds":    config.PollInterval.Seconds(),
+		"batch_size":               config.BatchSize,
+		"simhash_threshold":        config.SimhashThreshold,
+		"clustering_window_hrs":    config.ClusteringWindow.Hours(),
+		"embedding_provider":       "gemini text-embedding-004",
+		"embedding_high_threshold": config.EmbeddingHighThreshold,
+		"embedding_low_threshold":  config.EmbeddingLowThreshold,
+		"has_api_key":              config.GeminiAPIKey != "",
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -161,10 +250,10 @@ func main() {
 	}()
 
 	// Execute initial batch immediately
-	if count, err := processBatch(ctx, store, config); err != nil {
+	if count, err := processBatch(ctx, store, embedder, config); err != nil {
 		logJSON("ERROR", fmt.Sprintf("Batch processing error: %v", err), "", nil)
 	} else if count > 0 {
-		logJSON("INFO", fmt.Sprintf("Processed %d post(s) in batch", count), "", map[string]any{
+		logJSON("INFO", fmt.Sprintf("Processed %d post(s) in initial batch", count), "", map[string]any{
 			"processed_count": count,
 		})
 	}
@@ -178,7 +267,7 @@ func main() {
 			logJSON("INFO", "Processor service shutdown complete", "", nil)
 			return
 		case <-ticker.C:
-			count, err := processBatch(ctx, store, config)
+			count, err := processBatch(ctx, store, embedder, config)
 			if err != nil {
 				logJSON("ERROR", fmt.Sprintf("Batch processing error: %v", err), "", nil)
 			} else if count > 0 {
