@@ -56,11 +56,19 @@ jobs:
         run: |
           pytest services/listener/tests/
 
-      - name: Run golangci-lint
+      - name: Run golangci-lint (Processor)
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.59.1
           working-directory: services/processor
+          args: --timeout=5m
+        continue-on-error: false
+
+      - name: Run golangci-lint (API)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.59.1
+          working-directory: services/api
           args: --timeout=5m
         continue-on-error: false
 
@@ -85,10 +93,21 @@ jobs:
           echo "Testing connection and permissions with least-privilege app role (efi_app)..."
           PGPASSWORD=efi_app_pass psql -h localhost -p 5432 -U efi_app -d efi_dev -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM channels; SELECT count(*) FROM raw_posts; SELECT count(*) FROM news_events; SELECT count(*) FROM event_sources; SELECT count(*) FROM categories; SELECT count(*) FROM entities; SELECT count(*) FROM event_entities; SELECT count(*) FROM processing_audit;"
 
-      - name: Run Go Unit Tests
+          echo "Testing connection and permissions with least-privilege api role (efi_api)..."
+          PGPASSWORD=efi_api_pass psql -h localhost -p 5432 -U efi_api -d efi_dev -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM channels; SELECT count(*) FROM raw_posts; SELECT count(*) FROM news_events; SELECT count(*) FROM event_sources; SELECT count(*) FROM categories; SELECT count(*) FROM entities; SELECT count(*) FROM event_entities;"
+
+      - name: Run Go Unit Tests (Processor)
         working-directory: services/processor
+        run: go test -v ./...
+
+      - name: Run Go Unit Tests (API)
+        working-directory: services/api
+        env:
+          API_DATABASE_URL: postgres://efi_api:efi_api_pass@localhost:5432/efi_dev?sslmode=disable
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/efi_dev?sslmode=disable
         run: go test -v ./...
 
       - name: Run Python Fixture Validation
         run: python3 tests/validate_fixtures.py
+
 

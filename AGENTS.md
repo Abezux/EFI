@@ -152,3 +152,15 @@ If you encounter:
 - **Enrichment Lifecycle & Stability**: Events are enriched only after becoming stable (`last_updated_at <= NOW() - STABILITY_WINDOW_MINUTES`). Summarization, classification into one of the 9 canonical categories, and entity extraction are written atomically in `news_events`, `entities`, `event_entities`, and `processing_audit`.
 - **Provider Resilience & Fail-Safe Operation**: Upstream LLM failures retry with exponential backoff up to `MAX_LLM_RETRIES`. If retries are exhausted, events remain active without summaries, and posts remain in `needs_review`. The pipeline never crashes or loses data due to upstream AI errors.
 - **V5 Boundary**: V4 is strictly limited to LLM verification and event enrichment. No public API endpoints, SSE streams, or frontend web client code may be implemented until V5/V6.
+
+---
+
+## 14. V5 Addendum — Public API Service
+
+- **Go Standards**: Go code in `services/api/` must be formatted with `gofmt`, pass `golangci-lint` without warnings, and include comprehensive unit, middleware, and data-leak prevention tests.
+- **Least-Privilege Database Role (ADR-0009)**: The API service connects strictly using `API_DATABASE_URL` with the `efi_api` role. This role has `SELECT` privileges only on public-facing tables and has NO access to `processing_audit` and zero write permissions (`INSERT`, `UPDATE`, `DELETE`).
+- **Zero-Leak Guarantee**: All database queries must enforce `WHERE ne.status = 'active'` to guarantee that records in `needs_review` are never exposed over the public API.
+- **Attribution & Transparency**: All event responses must include `ai_summary_generated: true`. Source post previews must be bounded (`FormatExcerpt` with <= 160 runes) to uphold copyright compliance and transparent attribution.
+- **Middleware & Security Baseline**: The public API service must enforce per-IP token bucket rate limiting (returning HTTP 429 with `Retry-After`), CORS headers, panic recovery (returning clean HTTP 500 JSON without service interruption), and structured JSON request logging.
+- **V6 Boundary**: V5 is strictly limited to the read-only REST API. Real-time Server-Sent Events (SSE) streaming and web frontend clients are deferred to V6.
+
