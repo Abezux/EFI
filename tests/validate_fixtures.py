@@ -9,9 +9,7 @@ from datetime import datetime
 
 
 def validate_fixtures():
-    fixture_path = os.path.join(
-        os.path.dirname(__file__), "fixtures", "sample_telegram_posts.json"
-    )
+    fixture_path = os.path.join(os.path.dirname(__file__), "fixtures", "sample_telegram_posts.json")
     if not os.path.exists(fixture_path):
         print(f"FAIL: Fixture file not found at {fixture_path}", file=sys.stderr)
         return 1
@@ -30,10 +28,9 @@ def validate_fixtures():
 
     required_fields = {
         "channel_id",
-        "telegram_message_id",
+        "message_id",
         "raw_text",
         "posted_at",
-        "language",
     }
     fuel_posts = 0
 

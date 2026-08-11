@@ -60,6 +60,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: v1.59.1
+          working-directory: services/processor
           args: --timeout=5m
         continue-on-error: false
 
@@ -73,21 +74,21 @@ jobs:
           PGPASSWORD: postgres
         run: |
           echo "Applying migrations to test PostgreSQL database..."
-          psql -h localhost -p 5432 -U postgres -d efi_dev -v ON_ERROR_STOP=1 -f db/migrations/0001_init.sql
-          
-          if [ -f db/migrations/0002_seed_channels.sql ]; then
-            echo "Applying 0002_seed_channels.sql..."
-            psql -h localhost -p 5432 -U postgres -d efi_dev -v ON_ERROR_STOP=1 -f db/migrations/0002_seed_channels.sql
-          fi
+          for f in $(ls db/migrations/*.sql | sort); do
+            echo "Applying $f..."
+            psql -h localhost -p 5432 -U postgres -d efi_dev -v ON_ERROR_STOP=1 -f "$f"
+          done
           
           echo "Verifying schema tables and app role permissions..."
           psql -h localhost -p 5432 -U postgres -d efi_dev -v ON_ERROR_STOP=1 -c "\dt"
           
           echo "Testing connection and permissions with least-privilege app role (efi_app)..."
-          PGPASSWORD=efi_app_pass psql -h localhost -p 5432 -U efi_app -d efi_dev -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM channels; SELECT count(*) FROM raw_posts;"
+          PGPASSWORD=efi_app_pass psql -h localhost -p 5432 -U efi_app -d efi_dev -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM channels; SELECT count(*) FROM raw_posts; SELECT count(*) FROM news_events; SELECT count(*) FROM event_sources;"
 
       - name: Run Go Unit Tests
+        working-directory: services/processor
         run: go test -v ./...
 
       - name: Run Python Fixture Validation
         run: python3 tests/validate_fixtures.py
+

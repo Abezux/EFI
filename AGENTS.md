@@ -113,3 +113,16 @@ If you encounter:
 - **Fixture-Driven Testing**: `services/listener/` must be fully runnable and unit-tested against `tests/fixtures/sample_telegram_posts.json` without requiring live Telegram credentials. Real credentials are restricted to live MTProto listener runs.
 - **Database Write Boundary**: Services in `services/listener/` are strictly limited to writing `raw_posts` (with `processing_status = 'ingested'`) and reading/upserting `channels`. No listener code may write to `news_events`, `event_sources`, `categories`, or any downstream tables.
 
+---
+
+## 11. V2 Addendum — Pipeline Processor & Deduplication
+
+- **Go Standards**: Go code in `services/processor/` must be formatted with `gofmt`, pass `golangci-lint` without warnings, and include comprehensive unit tests for normalization, Simhash, and clustering decisions. Dependencies must be managed and pinned via `go.mod` / `go.sum`.
+- **Pipeline Boundaries (ADR-0006)**: V2 is strictly limited to text-similarity deduplication using 64-bit Simhash and Hamming distance. No vector embeddings (`pgvector`), AI enrichment models, or external LLM API calls may be introduced in V2.
+- **Database Write & Immutability Rules**:
+  - `raw_posts.raw_text` is strictly immutable.
+  - The processor reads posts with `processing_status = 'ingested'`, writes `raw_posts.normalized_text` and `raw_posts.simhash`, and transitions status to `'processed'`.
+  - The processor writes and updates `news_events` and `event_sources` in atomic database transactions.
+- **Structured Logging & Decision Auditing**: All batch runs and clustering decisions must emit structured JSON logs containing `timestamp`, `level`, `service: "processor"`, `correlation_id`, `raw_post_id`, `event_id`, and `decision` (`created_new_event` or `attached_to_event`).
+
+

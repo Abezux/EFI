@@ -37,6 +37,25 @@ services:
       postgres:
         condition: service_healthy
 
+  processor:
+    build:
+      context: ../services/processor
+      dockerfile: Dockerfile
+    container_name: efi_processor
+    restart: unless-stopped
+    environment:
+      APP_DATABASE_URL: postgres://${APP_DB_USER:-efi_app}:${APP_DB_PASSWORD:-efi_app_pass}@postgres:5432/${POSTGRES_DB:-efi_dev}?sslmode=disable
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-2}
+      BATCH_SIZE: ${BATCH_SIZE:-50}
+      SIMHASH_THRESHOLD: ${SIMHASH_THRESHOLD:-10}
+      CLUSTERING_WINDOW_HOURS: ${CLUSTERING_WINDOW_HOURS:-48}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      APP_ENV: ${APP_ENV:-development}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
     driver: local
+

@@ -6,11 +6,17 @@ Uses DATABASE_URL or APP_DATABASE_URL from .env.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
-import psycopg
+# Ensure repository root is on sys.path for direct execution
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-from services.listener.config import load_dotenv
+import psycopg  # noqa: E402
+
+from services.listener.config import load_dotenv  # noqa: E402
 
 
 def run_migrations() -> bool:
@@ -44,8 +50,6 @@ def run_migrations() -> bool:
 
 
 if __name__ == "__main__":
-    import sys
-
     success = run_migrations()
     if not success:
         sys.exit(1)
