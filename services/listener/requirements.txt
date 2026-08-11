@@ -1,0 +1,11 @@
+# Telegram MTProto Client
+telethon==1.36.0
+
+# PostgreSQL Driver (psycopg 3)
+psycopg[binary]==3.2.13
+
+# Testing & Quality Tools
+pytest==8.3.2
+pytest-asyncio==0.23.8
+ruff==0.5.7
+black==24.8.0

@@ -1,0 +1,88 @@
+[
+  {
+    "channel_id": 1001234567890,
+    "channel_handle": "fake_ena_news",
+    "channel_name": "ENA News (Fake)",
+    "message_id": 4051,
+    "raw_text": "የንግድና ቀጣናዊ ትስስር ሚኒስቴር የአዲሱን ወር የነዳጅ ምርቶች የችርቻሮ መሸጫ ዋጋ ማስተካከያ ይፋ አደረገ። በዚህም መሰረት የአንድ ሊትር ቤንዚን መሸጫ ዋጋ 101 ብር ከ85 ሳንቲም ሆኖ እንዲሸጥ ተወስኗል።",
+    "posted_at": "2026-08-10T08:30:00Z",
+    "raw_entities": [
+      {
+        "type": "bold",
+        "offset": 0,
+        "length": 25
+      }
+    ],
+    "media_refs": [
+      {
+        "type": "photo",
+        "file_id": "file_ena_fuel_001.jpg",
+        "caption": "የነዳጅ ዋጋ ማስተካከያ"
+      }
+    ]
+  },
+  {
+    "channel_id": 1009876543210,
+    "channel_handle": "fake_fana_broadcast",
+    "channel_name": "Fana Broadcast (Fake)",
+    "message_id": 8920,
+    "raw_text": "ሰበር ዜና፡ አዲሱ የነዳጅ ዋጋ ማስተካከያ ተገለጸ። የንግድ እና ቀጠናዊ ትስስር ሚኒስቴር እንዳስታወቀው የአንድ ሊትር ቤንዚን ዋጋ 101.85 ብር ሆኖ ተቀምጧል። አዲሱ ተመን ከዛሬ እኩለ ሌሊት ጀምሮ ተግባራዊ ይሆናል።",
+    "posted_at": "2026-08-10T08:34:12Z",
+    "raw_entities": [
+      {
+        "type": "bold",
+        "offset": 0,
+        "length": 8
+      }
+    ],
+    "media_refs": [
+      {
+        "type": "photo",
+        "file_id": "file_fbc_fuel_8920.jpg",
+        "caption": "አዲሱ የነዳጅ መሸጫ ዋጋ"
+      }
+    ]
+  },
+  {
+    "channel_id": 1001122334455,
+    "channel_handle": "fake_capital_ethiopia",
+    "channel_name": "Capital Ethiopia (Fake)",
+    "message_id": 1204,
+    "raw_text": "The National Bank of Ethiopia (NBE) has issued a revised foreign exchange directive aimed at enhancing foreign currency market transparency and easing remittance inflows through formal banking channels.",
+    "posted_at": "2026-08-10T10:15:30Z",
+    "raw_entities": [
+      {
+        "type": "mention",
+        "offset": 4,
+        "length": 29
+      }
+    ],
+    "media_refs": []
+  },
+  {
+    "channel_id": 1005566778899,
+    "channel_handle": "fake_ethiopian_monitor",
+    "channel_name": "Ethiopian Monitor (Fake)",
+    "message_id": 3140,
+    "raw_text": "Ethiopia generated $1.43 billion from coffee exports during the recently concluded fiscal year, shipping over 298,000 metric tons of specialty and commercial coffee to international markets, the Coffee and Tea Authority reported.",
+    "posted_at": "2026-08-10T11:45:00Z",
+    "raw_entities": [],
+    "media_refs": [
+      {
+        "type": "photo",
+        "file_id": "file_eth_coffee_3140.jpg",
+        "caption": "Ethiopian Coffee Export Cargo"
+      }
+    ]
+  },
+  {
+    "channel_id": 1009988776655,
+    "channel_handle": "fake_tikvah_ethiopia",
+    "channel_name": "Tikvah Ethiopia (Fake)",
+    "message_id": 55123,
+    "raw_text": "የአዲስ አበባ ከተማ አስተዳደር የመንገድ መሰረተ ልማት ማስፋፊያ ፕሮጀክት ሁለተኛ ምዕራፍ ግንባታ በይፋ መጀመሩን አስታውቋል። በፕሮጀክቱ 45 ኪሎ ሜትር የሚሸፍኑ ዋና ዋና የውስጥ ለውስጥ መንገዶች ደረጃቸው ይሻሻላል።",
+    "posted_at": "2026-08-10T14:20:00Z",
+    "raw_entities": [],
+    "media_refs": []
+  }
+]

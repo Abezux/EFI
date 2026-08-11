@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: efi_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-efi_dev}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-efi_dev}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  listener:
+    build:
+      context: ..
+      dockerfile: services/listener/Dockerfile
+    container_name: efi_listener
+    restart: unless-stopped
+    environment:
+      APP_DATABASE_URL: postgres://${APP_DB_USER:-efi_app}:${APP_DB_PASSWORD:-efi_app_pass}@postgres:5432/${POSTGRES_DB:-efi_dev}?sslmode=disable
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
+      TELEGRAM_SESSION_STRING: ${TELEGRAM_SESSION_STRING:-}
+      TELEGRAM_CHANNELS: ${TELEGRAM_CHANNELS:-}
+      RECONNECT_DELAY_SECONDS: ${RECONNECT_DELAY_SECONDS:-5}
+      MAX_RECONNECT_RETRIES: ${MAX_RECONNECT_RETRIES:-10}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+    driver: local
