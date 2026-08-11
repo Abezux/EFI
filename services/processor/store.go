@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/lib/pq"
@@ -277,5 +279,406 @@ func (s *Store) MarkPostNeedsReview(
 	if err != nil {
 		return fmt.Errorf("mark post needs_review: %w", err)
 	}
+	return nil
+}
+
+// AuditEntry captures metadata for the processing_audit table.
+type AuditEntry struct {
+	RawPostID   *int64
+	NewsEventID *int64
+	Stage       string // 'verification' | 'enrichment'
+	Decision    string // 'same_event' | 'different_event' | 'low_confidence_unresolved' | 'summary_generated'
+	Confidence  float32
+	ModelUsed   string
+	RawResponse string
+}
+
+// StableEvent represents an active event ready for AI summary and enrichment.
+type StableEvent struct {
+	ID             int64
+	CanonicalTitle string
+	LastUpdatedAt  time.Time
+	LastEnrichedAt *time.Time
+}
+
+// FetchNeedsReviewPosts retrieves raw_posts with processing_status = 'needs_review'.
+func (s *Store) FetchNeedsReviewPosts(ctx context.Context, limit int) ([]*RawPost, error) {
+	query := `
+		SELECT id, channel_id, telegram_message_id, raw_text, posted_at, COALESCE(normalized_text, ''), COALESCE(simhash, 0)
+		FROM raw_posts
+		WHERE processing_status = 'needs_review'
+		ORDER BY posted_at ASC, id ASC
+		LIMIT $1
+	`
+	rows, err := s.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query needs_review posts: %w", err)
+	}
+	defer rows.Close()
+
+	var posts []*RawPost
+	for rows.Next() {
+		p := &RawPost{}
+		var normText string
+		var simhash int64
+		if err := rows.Scan(&p.ID, &p.ChannelID, &p.TelegramMessageID, &p.RawText, &p.PostedAt, &normText, &simhash); err != nil {
+			return nil, fmt.Errorf("scan needs_review post: %w", err)
+		}
+		posts = append(posts, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+	return posts, nil
+}
+
+// FindNearestCandidateEvent finds the closest event within the clustering window using vector cosine distance.
+func (s *Store) FindNearestCandidateEvent(ctx context.Context, postID int64, window time.Duration) (*EventCandidate, float32, error) {
+	windowInterval := fmt.Sprintf("%d seconds", int(window.Seconds()))
+	query := `
+		SELECT ne.id, ne.canonical_title, ne.first_seen_at, ne.last_updated_at,
+		       COALESCE(ne.embedding_centroid::text, ''),
+		       1 - (ne.embedding_centroid <=> rp.embedding) AS cosine_sim
+		FROM news_events ne, raw_posts rp
+		WHERE rp.id = $1
+		  AND rp.embedding IS NOT NULL
+		  AND ne.embedding_centroid IS NOT NULL
+		  AND ne.status = 'active'
+		  AND ne.last_updated_at >= NOW() - $2::interval
+		ORDER BY ne.embedding_centroid <=> rp.embedding ASC
+		LIMIT 1
+	`
+	row := s.db.QueryRowContext(ctx, query, postID, windowInterval)
+	c := &EventCandidate{Sources: []EventSourceMember{}}
+	var centroidStr string
+	var similarity float32
+	err := row.Scan(&c.EventID, &c.CanonicalTitle, &c.FirstSeenAt, &c.LastUpdatedAt, &centroidStr, &similarity)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, 0, nil
+		}
+		return nil, 0, fmt.Errorf("query nearest event: %w", err)
+	}
+
+	if centroidStr != "" {
+		vec, err := ParsePgVector(centroidStr)
+		if err == nil {
+			c.EmbeddingCentroid = vec
+		}
+	}
+
+	// Fetch source texts for candidate
+	srcRows, err := s.db.QueryContext(ctx, `
+		SELECT rp.id, COALESCE(rp.normalized_text, ''), COALESCE(rp.simhash, 0)
+		FROM event_sources es
+		JOIN raw_posts rp ON es.raw_post_id = rp.id
+		WHERE es.event_id = $1
+	`, c.EventID)
+	if err == nil {
+		defer srcRows.Close()
+		for srcRows.Next() {
+			var m EventSourceMember
+			if err := srcRows.Scan(&m.RawPostID, &m.NormalizedText, &m.Simhash); err == nil {
+				c.Sources = append(c.Sources, m)
+			}
+		}
+	}
+
+	return c, similarity, nil
+}
+
+// AttachToEventWithAudit transactionally attaches a post to an event, updates centroid, marks status as 'processed',
+// and writes an audit row.
+func (s *Store) AttachToEventWithAudit(
+	ctx context.Context,
+	eventID int64,
+	postID int64,
+	postedAt time.Time,
+	audit AuditEntry,
+) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() // nolint:errcheck
+
+	sourceQuery := `
+		INSERT INTO event_sources (event_id, raw_post_id, similarity_score, added_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (event_id, raw_post_id) DO NOTHING
+	`
+	simScore := int(audit.Confidence * 100)
+	if _, err := tx.ExecContext(ctx, sourceQuery, eventID, postID, simScore); err != nil {
+		return fmt.Errorf("insert event_sources: %w", err)
+	}
+
+	updatePostQuery := `
+		UPDATE raw_posts
+		SET processing_status = 'processed'
+		WHERE id = $1
+	`
+	if _, err := tx.ExecContext(ctx, updatePostQuery, postID); err != nil {
+		return fmt.Errorf("update raw_posts: %w", err)
+	}
+
+	updateEventQuery := `
+		UPDATE news_events
+		SET source_count = (SELECT COUNT(*) FROM event_sources WHERE event_id = $1),
+		    last_updated_at = GREATEST(last_updated_at, $2),
+		    embedding_centroid = COALESCE(
+		        (SELECT avg(rp.embedding)::vector 
+		         FROM event_sources es 
+		         JOIN raw_posts rp ON es.raw_post_id = rp.id 
+		         WHERE es.event_id = $1 AND rp.embedding IS NOT NULL),
+		        embedding_centroid
+		    )
+		WHERE id = $1
+	`
+	if _, err := tx.ExecContext(ctx, updateEventQuery, eventID, postedAt); err != nil {
+		return fmt.Errorf("update news_events: %w", err)
+	}
+
+	auditQuery := `
+		INSERT INTO processing_audit (raw_post_id, news_event_id, stage, decision, confidence, model_used, raw_response, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+	`
+	if _, err := tx.ExecContext(ctx, auditQuery, audit.RawPostID, eventID, audit.Stage, audit.Decision, audit.Confidence, audit.ModelUsed, audit.RawResponse); err != nil {
+		return fmt.Errorf("insert processing_audit: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+
+	return nil
+}
+
+// CreateEventWithAudit transactionally creates a new news_events row, links the founding post,
+// updates post status to 'processed', and writes the audit row.
+func (s *Store) CreateEventWithAudit(
+	ctx context.Context,
+	post *RawPost,
+	canonicalTitle string,
+	audit AuditEntry,
+) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() // nolint:errcheck
+
+	var eventID int64
+	eventQuery := `
+		INSERT INTO news_events (canonical_title, status, first_seen_at, last_updated_at, source_count, embedding_centroid)
+		VALUES ($1, 'active', $2, $2, 1, (SELECT embedding FROM raw_posts WHERE id = $3))
+		RETURNING id
+	`
+	if err := tx.QueryRowContext(ctx, eventQuery, canonicalTitle, post.PostedAt, post.ID).Scan(&eventID); err != nil {
+		return 0, fmt.Errorf("insert news_events: %w", err)
+	}
+
+	sourceQuery := `
+		INSERT INTO event_sources (event_id, raw_post_id, similarity_score, added_at)
+		VALUES ($1, $2, NULL, NOW())
+	`
+	if _, err := tx.ExecContext(ctx, sourceQuery, eventID, post.ID); err != nil {
+		return 0, fmt.Errorf("insert event_sources: %w", err)
+	}
+
+	updatePostQuery := `
+		UPDATE raw_posts
+		SET processing_status = 'processed'
+		WHERE id = $1
+	`
+	if _, err := tx.ExecContext(ctx, updatePostQuery, post.ID); err != nil {
+		return 0, fmt.Errorf("update raw_posts: %w", err)
+	}
+
+	auditQuery := `
+		INSERT INTO processing_audit (raw_post_id, news_event_id, stage, decision, confidence, model_used, raw_response, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+	`
+	if _, err := tx.ExecContext(ctx, auditQuery, audit.RawPostID, eventID, audit.Stage, audit.Decision, audit.Confidence, audit.ModelUsed, audit.RawResponse); err != nil {
+		return 0, fmt.Errorf("insert processing_audit: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit tx: %w", err)
+	}
+
+	return eventID, nil
+}
+
+// RecordAudit writes a standalone row to processing_audit (e.g. for low_confidence_unresolved).
+func (s *Store) RecordAudit(ctx context.Context, audit AuditEntry) error {
+	auditQuery := `
+		INSERT INTO processing_audit (raw_post_id, news_event_id, stage, decision, confidence, model_used, raw_response, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+	`
+	_, err := s.db.ExecContext(ctx, auditQuery, audit.RawPostID, audit.NewsEventID, audit.Stage, audit.Decision, audit.Confidence, audit.ModelUsed, audit.RawResponse)
+	if err != nil {
+		return fmt.Errorf("insert processing_audit: %w", err)
+	}
+	return nil
+}
+
+// FetchStableEventsForEnrichment retrieves active news_events whose last source addition was at least
+// stabilityWindow ago, and either have not yet been enriched or gained newer sources since last enrichment.
+func (s *Store) FetchStableEventsForEnrichment(ctx context.Context, stabilityWindow time.Duration, limit int) ([]*StableEvent, error) {
+	windowInterval := fmt.Sprintf("%d seconds", int(stabilityWindow.Seconds()))
+	query := `
+		SELECT id, canonical_title, last_updated_at, last_enriched_at
+		FROM news_events
+		WHERE status = 'active'
+		  AND last_updated_at <= NOW() - $1::interval
+		  AND (last_enriched_at IS NULL OR last_updated_at > last_enriched_at)
+		ORDER BY last_updated_at ASC
+		LIMIT $2
+	`
+	rows, err := s.db.QueryContext(ctx, query, windowInterval, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query stable events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []*StableEvent
+	for rows.Next() {
+		e := &StableEvent{}
+		var enrichedAt sql.NullTime
+		if err := rows.Scan(&e.ID, &e.CanonicalTitle, &e.LastUpdatedAt, &enrichedAt); err != nil {
+			return nil, fmt.Errorf("scan stable event: %w", err)
+		}
+		if enrichedAt.Valid {
+			e.LastEnrichedAt = &enrichedAt.Time
+		}
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+	return events, nil
+}
+
+// FetchEventSourceTexts retrieves normalized texts from raw_posts attached to the given news_event.
+func (s *Store) FetchEventSourceTexts(ctx context.Context, eventID int64) ([]string, error) {
+	query := `
+		SELECT COALESCE(NULLIF(rp.normalized_text, ''), rp.raw_text)
+		FROM event_sources es
+		JOIN raw_posts rp ON es.raw_post_id = rp.id
+		WHERE es.event_id = $1
+		ORDER BY es.added_at ASC
+	`
+	rows, err := s.db.QueryContext(ctx, query, eventID)
+	if err != nil {
+		return nil, fmt.Errorf("query event source texts: %w", err)
+	}
+	defer rows.Close()
+
+	var texts []string
+	for rows.Next() {
+		var txt string
+		if err := rows.Scan(&txt); err != nil {
+			return nil, fmt.Errorf("scan source text: %w", err)
+		}
+		texts = append(texts, txt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows error: %w", err)
+	}
+	return texts, nil
+}
+
+// FetchCategories returns a map of category name -> id and a slice of valid category names.
+func (s *Store) FetchCategories(ctx context.Context) (map[string]int, []string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT id, name FROM categories ORDER BY id ASC")
+	if err != nil {
+		return nil, nil, fmt.Errorf("query categories: %w", err)
+	}
+	defer rows.Close()
+
+	catMap := make(map[string]int)
+	var catNames []string
+	for rows.Next() {
+		var id int
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, nil, fmt.Errorf("scan category: %w", err)
+		}
+		catMap[name] = id
+		catNames = append(catNames, name)
+	}
+	return catMap, catNames, nil
+}
+
+// SaveEnrichmentWithAudit transactionally writes ai_summary, category_id, extracted entities,
+// updates last_enriched_at, and writes a processing_audit record.
+func (s *Store) SaveEnrichmentWithAudit(
+	ctx context.Context,
+	eventID int64,
+	categoryID *int,
+	aiSummary string,
+	entities []ExtractedEntity,
+	audit AuditEntry,
+) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() // nolint:errcheck
+
+	updateEventQuery := `
+		UPDATE news_events
+		SET ai_summary = $1,
+		    category_id = $2,
+		    last_enriched_at = NOW()
+		WHERE id = $3
+	`
+	if _, err := tx.ExecContext(ctx, updateEventQuery, aiSummary, categoryID, eventID); err != nil {
+		return fmt.Errorf("update news_events enrichment: %w", err)
+	}
+
+	// Insert or find entities, then link in event_entities
+	for _, ent := range entities {
+		if strings.TrimSpace(ent.Name) == "" {
+			continue
+		}
+		entType := strings.ToLower(strings.TrimSpace(ent.Type))
+		if entType != "person" && entType != "place" && entType != "organization" {
+			entType = "organization"
+		}
+
+		var entityID int64
+		upsertEntityQuery := `
+			INSERT INTO entities (name, type)
+			VALUES ($1, $2)
+			ON CONFLICT (name, type) DO UPDATE SET name = EXCLUDED.name
+			RETURNING id
+		`
+		if err := tx.QueryRowContext(ctx, upsertEntityQuery, strings.TrimSpace(ent.Name), entType).Scan(&entityID); err != nil {
+			return fmt.Errorf("upsert entity %q: %w", ent.Name, err)
+		}
+
+		linkQuery := `
+			INSERT INTO event_entities (event_id, entity_id)
+			VALUES ($1, $2)
+			ON CONFLICT (event_id, entity_id) DO NOTHING
+		`
+		if _, err := tx.ExecContext(ctx, linkQuery, eventID, entityID); err != nil {
+			return fmt.Errorf("link event entity: %w", err)
+		}
+	}
+
+	auditQuery := `
+		INSERT INTO processing_audit (raw_post_id, news_event_id, stage, decision, confidence, model_used, raw_response, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+	`
+	if _, err := tx.ExecContext(ctx, auditQuery, audit.RawPostID, eventID, audit.Stage, audit.Decision, audit.Confidence, audit.ModelUsed, audit.RawResponse); err != nil {
+		return fmt.Errorf("insert processing_audit: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+
 	return nil
 }

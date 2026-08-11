@@ -1,11 +1,39 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
+
+func loadDotEnv() {
+	file, err := os.Open(".env")
+	if err != nil {
+		file, err = os.Open("../../.env")
+		if err != nil {
+			return
+		}
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || !strings.Contains(line, "=") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		k := strings.TrimSpace(parts[0])
+		v := strings.TrimSpace(parts[1])
+		v = strings.Trim(v, "\"'")
+		if k != "" && os.Getenv(k) == "" {
+			os.Setenv(k, v)
+		}
+	}
+}
 
 // Config encapsulates configuration parameters for the processor service.
 type Config struct {
@@ -18,12 +46,19 @@ type Config struct {
 	EmbeddingHighThreshold float64
 	EmbeddingLowThreshold  float64
 	MaxEmbeddingRetries    int
-	LogLevel               string
-	Environment            string
+
+	// V4 AI Enrichment Configuration
+	LLMModel                  string
+	VerifyConfidenceThreshold float32
+	StabilityWindowMinutes    int
+	MaxLLMRetries             int
+	LogLevel                  string
+	Environment               string
 }
 
 // LoadConfig reads configuration from environment variables with sensible defaults.
 func LoadConfig() (*Config, error) {
+	loadDotEnv()
 	dbURL := os.Getenv("APP_DATABASE_URL")
 	if dbURL == "" {
 		dbURL = os.Getenv("DATABASE_URL")
@@ -90,6 +125,32 @@ func LoadConfig() (*Config, error) {
 		}
 	}
 
+	llmModel := os.Getenv("LLM_MODEL")
+	if llmModel == "" {
+		llmModel = "gemini-flash-latest"
+	}
+
+	verifyConfidenceThreshold := float32(0.75)
+	if val := os.Getenv("VERIFY_CONFIDENCE_THRESHOLD"); val != "" {
+		if f, err := strconv.ParseFloat(val, 32); err == nil && f > 0.0 && f <= 1.0 {
+			verifyConfidenceThreshold = float32(f)
+		}
+	}
+
+	stabilityWindowMinutes := 15
+	if val := os.Getenv("STABILITY_WINDOW_MINUTES"); val != "" {
+		if sw, err := strconv.Atoi(val); err == nil && sw >= 0 {
+			stabilityWindowMinutes = sw
+		}
+	}
+
+	maxLLMRetries := 3
+	if val := os.Getenv("MAX_LLM_RETRIES"); val != "" {
+		if r, err := strconv.Atoi(val); err == nil && r >= 0 {
+			maxLLMRetries = r
+		}
+	}
+
 	logLevel := os.Getenv("LOG_LEVEL")
 	if logLevel == "" {
 		logLevel = "INFO"
@@ -101,16 +162,20 @@ func LoadConfig() (*Config, error) {
 	}
 
 	return &Config{
-		DatabaseURL:            dbURL,
-		PollInterval:           pollInterval,
-		BatchSize:              batchSize,
-		SimhashThreshold:       simhashThreshold,
-		ClusteringWindow:       clusteringWindow,
-		GeminiAPIKey:           geminiAPIKey,
-		EmbeddingHighThreshold: embeddingHighThreshold,
-		EmbeddingLowThreshold:  embeddingLowThreshold,
-		MaxEmbeddingRetries:    maxEmbeddingRetries,
-		LogLevel:               logLevel,
-		Environment:            env,
+		DatabaseURL:               dbURL,
+		PollInterval:              pollInterval,
+		BatchSize:                 batchSize,
+		SimhashThreshold:          simhashThreshold,
+		ClusteringWindow:          clusteringWindow,
+		GeminiAPIKey:              geminiAPIKey,
+		EmbeddingHighThreshold:    embeddingHighThreshold,
+		EmbeddingLowThreshold:     embeddingLowThreshold,
+		MaxEmbeddingRetries:       maxEmbeddingRetries,
+		LLMModel:                  llmModel,
+		VerifyConfidenceThreshold: verifyConfidenceThreshold,
+		StabilityWindowMinutes:    stabilityWindowMinutes,
+		MaxLLMRetries:             maxLLMRetries,
+		LogLevel:                  logLevel,
+		Environment:               env,
 	}, nil
 }

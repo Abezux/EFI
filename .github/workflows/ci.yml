@@ -83,7 +83,7 @@ jobs:
           psql -h localhost -p 5432 -U postgres -d efi_dev -v ON_ERROR_STOP=1 -c "\dt"
           
           echo "Testing connection and permissions with least-privilege app role (efi_app)..."
-          PGPASSWORD=efi_app_pass psql -h localhost -p 5432 -U efi_app -d efi_dev -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM channels; SELECT count(*) FROM raw_posts; SELECT count(*) FROM news_events; SELECT count(*) FROM event_sources;"
+          PGPASSWORD=efi_app_pass psql -h localhost -p 5432 -U efi_app -d efi_dev -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM channels; SELECT count(*) FROM raw_posts; SELECT count(*) FROM news_events; SELECT count(*) FROM event_sources; SELECT count(*) FROM categories; SELECT count(*) FROM entities; SELECT count(*) FROM event_entities; SELECT count(*) FROM processing_audit;"
 
       - name: Run Go Unit Tests
         working-directory: services/processor

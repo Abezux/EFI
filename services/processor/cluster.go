@@ -50,6 +50,11 @@ func truncateTitle(text string, maxRunes int) string {
 	return string(runes[:maxRunes])
 }
 
+// GenerateCanonicalTitle generates a short title from raw or normalized text.
+func GenerateCanonicalTitle(text string) string {
+	return truncateTitle(text, 120)
+}
+
 // DecideClustering evaluates a post against active candidate events within the time window:
 //  1. Exact Duplicate: If normalized text exactly matches an existing source in a candidate event,
 //     attaches immediately with similarity score 0 and match_reason="exact_text".

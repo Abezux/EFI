@@ -142,3 +142,13 @@ If you encounter:
 - **Centroid Maintenance**: `news_events.embedding_centroid` must be updated atomically on event creation and every subsequent post attachment using PostgreSQL vector aggregation.
 - **Provider Resilience**: External embedding API failures must be retried with exponential backoff up to `MAX_EMBEDDING_RETRIES`. If retries are exhausted, the post transitions to `needs_review` to prevent pipeline stall and guarantee zero data loss.
 - **V4 Boundary**: V3 is strictly limited to vector embedding generation, centroid maintenance, and semantic clustering. No AI enrichment models (LLM summary generation, entity extraction, category classification, or sentiment analysis) may be added until V4.
+
+---
+
+## 13. V4 Addendum — AI Enrichment & LLM Verification
+
+- **LLM Provider Seam (ADR-0008)**: All LLM generation (verification and enrichment) is decoupled behind the `LLMClient` Go interface in `llm.go`. Direct LLM API calls outside this interface are prohibited.
+- **Verification Rule & Confidence Safeguard**: Ambiguous posts (`needs_review`) are verified against candidate events with structured JSON schema. If `confidence < VERIFY_CONFIDENCE_THRESHOLD` (0.75), the post MUST remain in `needs_review` and log a `processing_audit` record (`low_confidence_unresolved`). The system must NEVER force-decide on low confidence.
+- **Enrichment Lifecycle & Stability**: Events are enriched only after becoming stable (`last_updated_at <= NOW() - STABILITY_WINDOW_MINUTES`). Summarization, classification into one of the 9 canonical categories, and entity extraction are written atomically in `news_events`, `entities`, `event_entities`, and `processing_audit`.
+- **Provider Resilience & Fail-Safe Operation**: Upstream LLM failures retry with exponential backoff up to `MAX_LLM_RETRIES`. If retries are exhausted, events remain active without summaries, and posts remain in `needs_review`. The pipeline never crashes or loses data due to upstream AI errors.
+- **V5 Boundary**: V4 is strictly limited to LLM verification and event enrichment. No public API endpoints, SSE streams, or frontend web client code may be implemented until V5/V6.

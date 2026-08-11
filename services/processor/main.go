@@ -51,6 +51,32 @@ func logJSON(level, message, correlationID string, extra map[string]any) {
 	}
 }
 
+// Logger provides structured logging methods.
+type Logger struct {
+	Level string
+}
+
+// NewLogger creates a new Logger.
+func NewLogger(level string) *Logger {
+	return &Logger{Level: level}
+}
+
+func (l *Logger) Info(message, correlationID string, extra map[string]any) {
+	logJSON("INFO", message, correlationID, extra)
+}
+
+func (l *Logger) Debug(message, correlationID string, extra map[string]any) {
+	logJSON("DEBUG", message, correlationID, extra)
+}
+
+func (l *Logger) Warn(message, correlationID string, extra map[string]any) {
+	logJSON("WARN", message, correlationID, extra)
+}
+
+func (l *Logger) Error(message, correlationID string, extra map[string]any) {
+	logJSON("ERROR", message, correlationID, extra)
+}
+
 // generateEmbeddingWithRetry attempts to generate an embedding up to maxRetries times.
 func generateEmbeddingWithRetry(ctx context.Context, embedder Embedder, text string, maxRetries int, corrID string) ([]float32, error) {
 	if embedder == nil {
@@ -89,6 +115,7 @@ func generateEmbeddingWithRetry(ctx context.Context, embedder Embedder, text str
 	return nil, fmt.Errorf("exhausted %d embedding retries: %w", maxRetries, lastErr)
 }
 
+// processBatch processes raw_posts with processing_status = 'ingested'.
 func processBatch(ctx context.Context, store *Store, embedder Embedder, config *Config) (int, error) {
 	posts, err := store.FetchUnprocessedPosts(ctx, config.BatchSize)
 	if err != nil {
@@ -117,9 +144,7 @@ func processBatch(ctx context.Context, store *Store, embedder Embedder, config *
 			continue
 		}
 
-		// 4. Check Fast-Path (Simhash match)
-		// If simhash matches within threshold, we can attach immediately without blocking on embedding.
-		// However, we still attempt embedding generation to keep the centroid vector updated.
+		// 4. Check Fast-Path (Simhash match) and generate embedding
 		var embedding []float32
 		if embedder != nil && config.GeminiAPIKey != "" {
 			emb, embErr := generateEmbeddingWithRetry(ctx, embedder, normalized, config.MaxEmbeddingRetries, corrID)
@@ -200,6 +225,73 @@ func processBatch(ctx context.Context, store *Store, embedder Embedder, config *
 	return processedCount, nil
 }
 
+// processNeedsReviewBatch polls and verifies posts in needs_review status.
+func processNeedsReviewBatch(ctx context.Context, store *Store, llm LLMClient, config *Config, logger *Logger) (int, error) {
+	if llm == nil || config.GeminiAPIKey == "" {
+		return 0, nil
+	}
+
+	posts, err := store.FetchNeedsReviewPosts(ctx, config.BatchSize)
+	if err != nil {
+		return 0, fmt.Errorf("fetch needs_review posts: %w", err)
+	}
+
+	resolvedCount := 0
+	for _, post := range posts {
+		corrID := generateCorrelationID()
+		outcome, err := ProcessSingleNeedsReviewPost(ctx, store, llm, post, config, logger, corrID)
+		if err != nil {
+			logger.Error(fmt.Sprintf("Failed to process needs_review post %d: %v", post.ID, err), corrID, map[string]any{
+				"raw_post_id": post.ID,
+			})
+			continue
+		}
+		if outcome == OutcomeAttachedToEvent || outcome == OutcomeCreatedNewEvent || outcome == OutcomeSkippedNoCand {
+			resolvedCount++
+		}
+		time.Sleep(2500 * time.Millisecond)
+	}
+
+	return resolvedCount, nil
+}
+
+// processEnrichmentBatch polls and enriches stable events.
+func processEnrichmentBatch(ctx context.Context, store *Store, llm LLMClient, config *Config, logger *Logger) (int, error) {
+	if llm == nil || config.GeminiAPIKey == "" {
+		return 0, nil
+	}
+
+	stabilityWindow := time.Duration(config.StabilityWindowMinutes) * time.Minute
+	events, err := store.FetchStableEventsForEnrichment(ctx, stabilityWindow, config.BatchSize)
+	if err != nil {
+		return 0, fmt.Errorf("fetch stable events: %w", err)
+	}
+
+	if len(events) == 0 {
+		return 0, nil
+	}
+
+	catMap, catNames, err := store.FetchCategories(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("fetch categories: %w", err)
+	}
+
+	enrichedCount := 0
+	for _, event := range events {
+		corrID := generateCorrelationID()
+		if err := ProcessSingleStableEvent(ctx, store, llm, event, catMap, catNames, config, logger, corrID); err != nil {
+			logger.Error(fmt.Sprintf("Failed to enrich stable event %d: %v", event.ID, err), corrID, map[string]any{
+				"event_id": event.ID,
+			})
+			continue
+		}
+		enrichedCount++
+		time.Sleep(2500 * time.Millisecond)
+	}
+
+	return enrichedCount, nil
+}
+
 func main() {
 	config, err := LoadConfig()
 	if err != nil {
@@ -220,21 +312,25 @@ func main() {
 	}
 
 	store := NewStore(db)
+	logger := NewLogger(config.LogLevel)
 
 	var embedder Embedder
+	var llm LLMClient
 	if config.GeminiAPIKey != "" {
 		embedder = NewGeminiEmbedder(config.GeminiAPIKey)
+		llm = NewGeminiLLMClientWithModel(config.GeminiAPIKey, config.LLMModel)
 	}
 
-	logJSON("INFO", "V3 Semantic Processor service started", "", map[string]any{
-		"poll_interval_seconds":    config.PollInterval.Seconds(),
-		"batch_size":               config.BatchSize,
-		"simhash_threshold":        config.SimhashThreshold,
-		"clustering_window_hrs":    config.ClusteringWindow.Hours(),
-		"embedding_provider":       "gemini text-embedding-004",
-		"embedding_high_threshold": config.EmbeddingHighThreshold,
-		"embedding_low_threshold":  config.EmbeddingLowThreshold,
-		"has_api_key":              config.GeminiAPIKey != "",
+	logJSON("INFO", "V4 AI Enrichment & Processor service started", "", map[string]any{
+		"poll_interval_seconds":       config.PollInterval.Seconds(),
+		"batch_size":                  config.BatchSize,
+		"simhash_threshold":           config.SimhashThreshold,
+		"clustering_window_hrs":       config.ClusteringWindow.Hours(),
+		"embedding_provider":          "gemini text-embedding-004",
+		"llm_model":                   config.LLMModel,
+		"verify_confidence_threshold": config.VerifyConfidenceThreshold,
+		"stability_window_minutes":    config.StabilityWindowMinutes,
+		"has_api_key":                 config.GeminiAPIKey != "",
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -249,14 +345,31 @@ func main() {
 		cancel()
 	}()
 
-	// Execute initial batch immediately
-	if count, err := processBatch(ctx, store, embedder, config); err != nil {
-		logJSON("ERROR", fmt.Sprintf("Batch processing error: %v", err), "", nil)
-	} else if count > 0 {
-		logJSON("INFO", fmt.Sprintf("Processed %d post(s) in initial batch", count), "", map[string]any{
-			"processed_count": count,
-		})
+	runPipelineCycle := func() {
+		// Stage 1: Ingested raw_posts clustering pass
+		if count, err := processBatch(ctx, store, embedder, config); err != nil {
+			logJSON("ERROR", fmt.Sprintf("Batch processing error: %v", err), "", nil)
+		} else if count > 0 {
+			logJSON("INFO", fmt.Sprintf("Processed %d post(s) in batch", count), "", map[string]any{"processed_count": count})
+		}
+
+		// Stage 2: Verification pass on needs_review posts
+		if resolved, err := processNeedsReviewBatch(ctx, store, llm, config, logger); err != nil {
+			logJSON("ERROR", fmt.Sprintf("Needs-review verification error: %v", err), "", nil)
+		} else if resolved > 0 {
+			logJSON("INFO", fmt.Sprintf("Resolved %d needs_review post(s)", resolved), "", map[string]any{"resolved_count": resolved})
+		}
+
+		// Stage 3: Enrichment pass on stable events
+		if enriched, err := processEnrichmentBatch(ctx, store, llm, config, logger); err != nil {
+			logJSON("ERROR", fmt.Sprintf("Stable event enrichment error: %v", err), "", nil)
+		} else if enriched > 0 {
+			logJSON("INFO", fmt.Sprintf("Enriched %d stable event(s)", enriched), "", map[string]any{"enriched_count": enriched})
+		}
 	}
+
+	// Execute initial pass immediately
+	runPipelineCycle()
 
 	ticker := time.NewTicker(config.PollInterval)
 	defer ticker.Stop()
@@ -267,14 +380,7 @@ func main() {
 			logJSON("INFO", "Processor service shutdown complete", "", nil)
 			return
 		case <-ticker.C:
-			count, err := processBatch(ctx, store, embedder, config)
-			if err != nil {
-				logJSON("ERROR", fmt.Sprintf("Batch processing error: %v", err), "", nil)
-			} else if count > 0 {
-				logJSON("INFO", fmt.Sprintf("Processed %d post(s) in batch", count), "", map[string]any{
-					"processed_count": count,
-				})
-			}
+			runPipelineCycle()
 		}
 	}
 }
