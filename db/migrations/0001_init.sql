@@ -51,7 +51,11 @@ end
 $$;
 
 -- Grant permissions to efi_app role
-grant connect on database current_database() to efi_app;
+do $$
+begin
+  execute format('grant connect on database %I to efi_app', current_database());
+end
+$$;
 grant usage on schema public to efi_app;
 grant select, insert, update on table channels to efi_app;
 grant select, insert, update on table raw_posts to efi_app;

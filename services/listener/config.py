@@ -7,6 +7,24 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
+
+
+def load_dotenv(filepath: str | Path = ".env") -> None:
+    """Simple built-in .env parser to load local environment variables if present."""
+    p = Path(filepath)
+    if not p.is_file():
+        return
+    with open(p, encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip().strip("'\"")
+            if k and k not in os.environ:
+                os.environ[k] = v
 
 
 @dataclass(frozen=True)
@@ -21,12 +39,20 @@ class Config:
     log_level: str = "INFO"
 
     @classmethod
-    def from_env(cls, env: dict[str, str] | None = None) -> Config:
+    def from_env(
+        cls,
+        env: dict[str, str] | None = None,
+        allow_empty_session: bool = False,
+    ) -> Config:
         """
         Load and validate configuration from the provided environment dictionary or os.environ.
         Raises ValueError if required settings are missing or invalid.
         """
-        environ = os.environ if env is None else env
+        if env is None:
+            load_dotenv()
+            environ = os.environ
+        else:
+            environ = env
 
         # 1. Database Connection URL
         database_url = environ.get("APP_DATABASE_URL") or environ.get("DATABASE_URL")
@@ -58,7 +84,7 @@ class Config:
 
         # 3. Telegram Session String
         telegram_session_string = environ.get("TELEGRAM_SESSION_STRING", "").strip()
-        if not telegram_session_string:
+        if not telegram_session_string and not allow_empty_session:
             raise ValueError(
                 "Missing required environment variable: TELEGRAM_SESSION_STRING (per ADR-0005)"
             )

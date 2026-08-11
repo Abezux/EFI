@@ -15,7 +15,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, utils
 from telethon.sessions import StringSession
 
 from services.listener.config import Config
@@ -56,7 +56,7 @@ class TelegramListener:
 
     async def initialize_client(self) -> None:
         """Initializes the Telethon client with the session string from environment."""
-        session = StringSession(self.config.telegram_session_string)
+        session = StringSession(self.config.telegram_session_string or "")
         self.client = TelegramClient(
             session,
             self.config.telegram_api_id,
@@ -88,12 +88,17 @@ class TelegramListener:
                         name=name,
                         handle=handle,
                     )
+                    # Store both bare channel ID and full peer ID
                     self.channel_map[telegram_channel_id] = db_channel_id
+                    peer_id = utils.get_peer_id(entity)
+                    self.channel_map[peer_id] = db_channel_id
+
                     log_json(
                         "INFO",
                         f"Mapped channel '{name}' -> DB id {db_channel_id}",
                         extra={
                             "telegram_channel_id": telegram_channel_id,
+                            "peer_id": peer_id,
                             "db_channel_id": db_channel_id,
                             "handle": handle,
                         },
@@ -113,29 +118,44 @@ class TelegramListener:
         msg = event.message
         chat_id = event.chat_id
 
-        # Normalize telegram channel id
-        telegram_channel_id = event.chat.id if event.chat else abs(chat_id)
-        db_channel_id = self.channel_map.get(telegram_channel_id)
+        # Resolve peer channel ID
+        resolved_id, _ = utils.resolve_id(chat_id)
+        db_channel_id = self.channel_map.get(chat_id) or self.channel_map.get(resolved_id)
+
+        chat = event.chat
+        if not chat and hasattr(event, "get_chat"):
+            try:
+                chat = await event.get_chat()
+            except Exception:
+                chat = None
+
+        if not db_channel_id and chat:
+            db_channel_id = self.channel_map.get(chat.id)
 
         if not db_channel_id:
-            # Dynamically resolve and register channel if not in map
-            chat_name = getattr(event.chat, "title", f"Channel {telegram_channel_id}")
-            chat_handle = getattr(event.chat, "username", None)
+            # Check if this chat is one of our monitored channels
+            chat_name = getattr(chat, "title", f"Channel {resolved_id}")
+            chat_handle = getattr(chat, "username", None)
             try:
                 db_channel_id = self.db.get_or_create_channel(
-                    telegram_channel_id=telegram_channel_id,
+                    telegram_channel_id=resolved_id,
                     name=chat_name,
                     handle=chat_handle,
                 )
-                self.channel_map[telegram_channel_id] = db_channel_id
+                self.channel_map[resolved_id] = db_channel_id
+                self.channel_map[chat_id] = db_channel_id
             except Exception as err:
                 log_json(
                     "ERROR",
-                    f"Failed to register channel {telegram_channel_id} in DB: {err}",
+                    f"Failed to register channel {resolved_id} in DB: {err}",
                     correlation_id=correlation_id,
                     extra={"error": str(err)},
                 )
                 return
+
+        # Skip messages if text is empty and no media
+        if not getattr(msg, "text", None) and not getattr(msg, "media", None):
+            return
 
         try:
             payload = normalize_telethon_message(
@@ -190,14 +210,30 @@ class TelegramListener:
         assert self.client is not None
 
         log_json("INFO", "Connecting to Telegram MTProto network...")
-        await self.client.connect()
 
-        if not await self.client.is_user_authorized():
+        if not self.config.telegram_session_string:
+            # Interactive first-time login
             log_json(
-                "ERROR",
-                "Telegram session is unauthorized. A valid TELEGRAM_SESSION_STRING is required.",
+                "INFO",
+                "TELEGRAM_SESSION_STRING is empty. Initiating interactive Telegram login...",
             )
-            raise PermissionError("Telegram session unauthorized")
+            await self.client.start()
+            saved_session = self.client.session.save()
+            sys.stdout.write("\n" + "=" * 80 + "\n")
+            sys.stdout.write("TELEGRAM SESSION STRING GENERATED SUCCESSFULLY:\n\n")
+            sys.stdout.write(f"{saved_session}\n\n")
+            sys.stdout.write("Copy the string above and add it to your .env file as:\n")
+            sys.stdout.write(f"TELEGRAM_SESSION_STRING={saved_session}\n")
+            sys.stdout.write("=" * 80 + "\n\n")
+            sys.stdout.flush()
+        else:
+            await self.client.connect()
+            if not await self.client.is_user_authorized():
+                log_json(
+                    "ERROR",
+                    "Telegram session unauthorized. A valid TELEGRAM_SESSION_STRING is required.",
+                )
+                raise PermissionError("Telegram session unauthorized")
 
         log_json("INFO", "Telegram client authorized successfully.")
 
@@ -205,14 +241,14 @@ class TelegramListener:
         resolved_entities = await self.resolve_channels()
         target_chats = resolved_entities if resolved_entities else None
 
-        # Register event handler
-        @self.client.on(events.NewMessage(chats=target_chats))
+        # Register event handler with both incoming and outgoing message events
+        @self.client.on(events.NewMessage(chats=target_chats, incoming=None, outgoing=None))
         async def on_message_event(event: events.NewMessage.Event) -> None:
             await self.handle_new_message(event)
 
         log_json(
             "INFO",
-            f"Telegram listener active and monitoring {len(self.channel_map)} channel(s).",
+            f"Telegram listener active and monitoring {len(resolved_entities)} channel(s).",
             extra={"monitored_channels": list(self.channel_map.keys())},
         )
 
@@ -235,8 +271,15 @@ async def async_main() -> None:
     try:
         config = Config.from_env()
     except ValueError as err:
-        log_json("ERROR", f"Configuration error: {err}")
-        sys.exit(1)
+        if "TELEGRAM_SESSION_STRING" in str(err):
+            try:
+                config = Config.from_env(allow_empty_session=True)
+            except Exception as e:
+                log_json("ERROR", f"Configuration error: {e}")
+                sys.exit(1)
+        else:
+            log_json("ERROR", f"Configuration error: {err}")
+            sys.exit(1)
 
     db = Database(config.database_url)
     listener = TelegramListener(config, db)

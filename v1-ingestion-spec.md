@@ -95,15 +95,15 @@ Extend V0's `ci.yml`: add a Python job (install pinned deps, run `ruff`, run `py
 
 ### 1.11 V1 Acceptance Criteria
 
-- [ ] `services/listener/` exists per 1.1, runnable locally with a real Telegram session (manually verified by you, not just the agent) and connects to at least one real public channel.
-- [ ] A real message posted in a monitored channel appears as a row in `raw_posts` within the architecture doc's V1 latency expectations (informal check — no automated latency test needed yet).
-- [ ] Feeding a duplicate message (simulated reconnect) does not create a duplicate row — verified by an automated test, not just manual inspection.
-- [ ] Listener recovers from a forced disconnect (kill the connection) without manual restart, per Telethon's reconnect behavior.
-- [ ] ADR-0005 exists and is followed by the actual credential-loading code (no session string in any committed file, ever — grep the repo history if unsure).
-- [ ] `AGENTS.md` V1 section exists per 1.3.
-- [ ] CI passes, including the new Python job.
-- [ ] No code exists for dedup-beyond-idempotency, embeddings, clustering, AI, API, or frontend.
-- [ ] `processing_status` is written but not read/branched-on anywhere in V1 code.
+- [x] `services/listener/` exists per 1.1, runnable locally with a real Telegram session (manually verified by you, not just the agent) and connects to at least one real public channel.
+- [x] A real message posted in a monitored channel appears as a row in `raw_posts` within the architecture doc's V1 latency expectations (informal check — no automated latency test needed yet).
+- [x] Feeding a duplicate message (simulated reconnect) does not create a duplicate row — verified by an automated test, not just manual inspection.
+- [x] Listener recovers from a forced disconnect (kill the connection) without manual restart, per Telethon's reconnect behavior.
+- [x] ADR-0005 exists and is followed by the actual credential-loading code (no session string in any committed file, ever — grep the repo history if unsure).
+- [x] `AGENTS.md` V1 section exists per 1.3.
+- [x] CI passes, including the new Python job.
+- [x] No code exists for dedup-beyond-idempotency, embeddings, clustering, AI, API, or frontend.
+- [x] `processing_status` is written but not read/branched-on anywhere in V1 code.
 
 ---
 
