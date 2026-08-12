@@ -28,6 +28,7 @@ type ExtractedEntity struct {
 
 // EnrichmentResult represents the output of an event enrichment call.
 type EnrichmentResult struct {
+	AIHeadline  string            `json:"ai_headline"`
 	AISummary   string            `json:"ai_summary"`
 	Category    string            `json:"category"`
 	Entities    []ExtractedEntity `json:"entities"`
@@ -64,7 +65,7 @@ func NewGeminiLLMClientWithModel(apiKey, model string) *GeminiLLMClient {
 		model:   model,
 		baseURL: "https://generativelanguage.googleapis.com/v1beta",
 		httpClient: &http.Client{
-			Timeout: 15 * time.Second,
+			Timeout: 60 * time.Second,
 		},
 	}
 }
@@ -216,35 +217,41 @@ Respond STRICTLY in JSON with this exact schema:
 	return &res, nil
 }
 
-// EnrichEvent generates an objective 2-4 sentence summary, selects a category, and extracts named entities for a stable event.
+// EnrichEvent synthesizes all source reports into a complete multi-paragraph news report,
+// produces a non-truncated headline, selects a category, and extracts named entities for a stable event.
 func (g *GeminiLLMClient) EnrichEvent(ctx context.Context, eventTexts []string, validCategories []string) (*EnrichmentResult, error) {
 	if len(eventTexts) == 0 {
 		return nil, errors.New("cannot enrich event with zero source texts")
 	}
 
-	sourcesBlock := strings.Join(eventTexts, "\n---\n")
+	sourcesBlock := strings.Join(eventTexts, "\n\n---\n\n")
 	catsList := strings.Join(validCategories, ", ")
 
-	prompt := fmt.Sprintf(`You are an objective financial news analyst and editor for an Ethiopian economic intelligence platform.
-Synthesize the provided source reports for a single news event.
+	prompt := fmt.Sprintf(`You are an elite, objective economic and financial news journalist and editor for an Ethiopian market intelligence platform.
+Using ONLY the facts, figures, and direct statements present in the source texts below (reported by %d source channel post(s) for this single event), write a complete, well-organized, comprehensive news report in flowing English prose.
 
-Requirements:
-1. "ai_summary": Write a concise, factual 2 to 4 sentence synthesis in English. It MUST be written in your own words (not copying any single source directly). It must be objective and free of hype.
-2. "category": Choose EXACTLY ONE category from this valid list: [%s].
-3. "entities": Extract up to 6 key named entities mentioned in the reports. For each entity, specify "name" (as referenced in text) and "type" ("person", "place", or "organization").
-4. If sources are in Amharic, translate and summarize accurately into English while preserving entity names.
+CORE EDITORIAL & ACCURACY REQUIREMENTS:
+1. "ai_headline": Generate a complete, polished, non-truncated news headline in English. It must express a full thought, use proper headline capitalization, and NEVER cut off mid-sentence or end with an ellipsis.
+2. "ai_summary": Write a complete, comprehensive news report in flowing English prose — use multiple paragraphs (separated by \n\n) if the source material contains enough corroborated detail.
+   - Flow & Structure: Write a cohesive, flowing journalistic narrative rather than disconnected bullet points or a thin blurb.
+   - Verbatim Quotations: If any source report includes a direct quote, official statement, or remark, PRESERVE IT VERBATIM and explicitly attribute it to its source channel (e.g., "quoted remark," per Capital Ethiopia).
+   - STRICT FACTUALITY & ANTI-HALLUCINATION: Report ONLY facts, numbers, dates, claims, and entity names explicitly present in the provided source texts. Do NOT invent, assume, extrapolate, or add background details not present in the sources.
+3. "category": Choose EXACTLY ONE category from this valid list: [%s].
+4. "entities": Extract key named entities (people, places, organizations) mentioned in the source reports. For each entity, specify "name" (as referenced in text) and "type" ("person", "place", or "organization").
+5. If sources are in Amharic, accurately translate and synthesize into English while preserving entity names and direct quotations.
 
 Source Reports:
 %s
 
 Respond STRICTLY in JSON with this exact schema:
 {
-  "ai_summary": "2-4 sentence summary in English",
+  "ai_headline": "Complete, non-truncated professional headline in English",
+  "ai_summary": "Comprehensive multi-paragraph report in English (paragraphs separated by \\n\\n)...",
   "category": "one exact category from the list",
   "entities": [
     {"name": "Entity Name", "type": "person" | "place" | "organization"}
   ]
-}`, catsList, sourcesBlock)
+}`, len(eventTexts), catsList, sourcesBlock)
 
 	rawText, err := g.generateJSON(ctx, prompt)
 	if err != nil {

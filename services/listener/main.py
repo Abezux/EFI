@@ -13,7 +13,7 @@ import signal
 import sys
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from telethon import TelegramClient, events, utils
 from telethon.sessions import StringSession
@@ -217,7 +217,7 @@ class TelegramListener:
                 "INFO",
                 "TELEGRAM_SESSION_STRING is empty. Initiating interactive Telegram login...",
             )
-            await self.client.start()
+            await cast(Any, self.client.start())
             saved_session = self.client.session.save()
             sys.stdout.write("\n" + "=" * 80 + "\n")
             sys.stdout.write("TELEGRAM SESSION STRING GENERATED SUCCESSFULLY:\n\n")
@@ -227,13 +227,42 @@ class TelegramListener:
             sys.stdout.write("=" * 80 + "\n\n")
             sys.stdout.flush()
         else:
-            await self.client.connect()
-            if not await self.client.is_user_authorized():
+            connected = False
+            last_err = None
+            max_retries = self.config.max_reconnect_retries
+            for attempt in range(1, max_retries + 1):
+                try:
+                    log_json(
+                        "INFO",
+                        f"Connecting to Telegram network (attempt {attempt}/{max_retries})...",
+                    )
+                    await self.client.connect()
+                    if not await self.client.is_user_authorized():
+                        log_json(
+                            "ERROR",
+                            "Telegram session unauthorized. Valid session string required.",
+                        )
+                        raise PermissionError("Telegram session unauthorized")
+                    connected = True
+                    break
+                except PermissionError:
+                    raise
+                except (ConnectionError, OSError, TimeoutError) as conn_err:
+                    last_err = conn_err
+                    log_json(
+                        "WARN",
+                        f"Telegram connection attempt {attempt} failed: {conn_err}. "
+                        f"Retrying in {self.config.reconnect_delay_seconds}s...",
+                        extra={"attempt": attempt, "error": str(conn_err)},
+                    )
+                    await asyncio.sleep(self.config.reconnect_delay_seconds)
+
+            if not connected:
                 log_json(
                     "ERROR",
-                    "Telegram session unauthorized. A valid TELEGRAM_SESSION_STRING is required.",
+                    f"Could not connect to Telegram after {max_retries} attempts: {last_err}",
                 )
-                raise PermissionError("Telegram session unauthorized")
+                raise ConnectionError(f"Failed to connect to Telegram: {last_err}")
 
         log_json("INFO", "Telegram client authorized successfully.")
 

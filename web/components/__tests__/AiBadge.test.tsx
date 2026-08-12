@@ -42,6 +42,14 @@ describe('AiBadge & AiSummaryBox Transparency', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('renders multi-paragraph summary into distinct paragraph elements', () => {
+    const multiPara = "First paragraph providing comprehensive overview.\n\nSecond paragraph with details and \"direct quotation\" from official.";
+    render(<AiSummaryBox summary={multiPara} isAiGenerated={true} />);
+
+    expect(screen.getByTestId('ai-summary-p-0')).toHaveTextContent('First paragraph providing comprehensive overview.');
+    expect(screen.getByTestId('ai-summary-p-1')).toHaveTextContent('Second paragraph with details and "direct quotation" from official.');
+  });
+
   it('renders nothing when summary is empty', () => {
     const { container } = render(
       <AiSummaryBox summary="" isAiGenerated={true} />

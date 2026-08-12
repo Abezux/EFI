@@ -107,12 +107,13 @@ func ProcessSingleStableEvent(
 		RawResponse: result.RawResponse,
 	}
 
-	if err := store.SaveEnrichmentWithAudit(ctx, event.ID, categoryID, result.AISummary, result.Entities, audit); err != nil {
+	if err := store.SaveEnrichmentWithAudit(ctx, event.ID, categoryID, result.AIHeadline, result.AISummary, result.Entities, audit); err != nil {
 		return fmt.Errorf("save enrichment with audit for event %d: %w", event.ID, err)
 	}
 
 	logger.Info("Event enriched successfully with AI summary and entities", corrID, map[string]any{
 		"event_id":       event.ID,
+		"ai_headline":    result.AIHeadline,
 		"category":       result.Category,
 		"category_id":    categoryID,
 		"entities_count": len(result.Entities),

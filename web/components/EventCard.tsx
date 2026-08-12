@@ -36,6 +36,7 @@ export function formatTimeAgo(dateString: string): string {
 
 export function EventCard({ event }: EventCardProps) {
   const timeAgo = formatTimeAgo(event.last_updated_at || event.first_seen_at);
+  const headline = (event.ai_headline && event.ai_headline.trim()) || event.canonical_title;
 
   return (
     <article className="event-card" data-testid={`event-card-${event.id}`}>
@@ -66,7 +67,7 @@ export function EventCard({ event }: EventCardProps) {
 
       <h2 className="event-card-title">
         <Link href={`/events/${event.id}`} className="event-card-title-link">
-          {event.canonical_title}
+          {headline}
         </Link>
       </h2>
 

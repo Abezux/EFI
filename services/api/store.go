@@ -50,6 +50,7 @@ type SourceDetail struct {
 type EventSummary struct {
 	ID                 int64         `json:"id"`
 	CanonicalTitle     string        `json:"canonical_title"`
+	AIHeadline         *string       `json:"ai_headline,omitempty"`
 	AISummary          string        `json:"ai_summary"`
 	AISummaryGenerated bool          `json:"ai_summary_generated"`
 	Category           *CategoryInfo `json:"category,omitempty"`
@@ -63,6 +64,7 @@ type EventSummary struct {
 type EventDetail struct {
 	ID                 int64          `json:"id"`
 	CanonicalTitle     string         `json:"canonical_title"`
+	AIHeadline         *string        `json:"ai_headline,omitempty"`
 	AISummary          string         `json:"ai_summary"`
 	AISummaryGenerated bool           `json:"ai_summary_generated"`
 	Category           *CategoryInfo  `json:"category,omitempty"`
@@ -220,6 +222,7 @@ func (s *SQLStore) GetEvents(ctx context.Context, filter EventFilter) (*EventLis
 		SELECT 
 			ne.id,
 			ne.canonical_title,
+			ne.ai_headline,
 			coalesce(ne.ai_summary, ''),
 			ne.source_count,
 			ne.first_seen_at,
@@ -247,6 +250,7 @@ func (s *SQLStore) GetEvents(ctx context.Context, filter EventFilter) (*EventLis
 	for rows.Next() {
 		var (
 			ev           EventSummary
+			aiHeadline   sql.NullString
 			catID        sql.NullInt64
 			catName      sql.NullString
 			catSlug      sql.NullString
@@ -256,6 +260,7 @@ func (s *SQLStore) GetEvents(ctx context.Context, filter EventFilter) (*EventLis
 		if err := rows.Scan(
 			&ev.ID,
 			&ev.CanonicalTitle,
+			&aiHeadline,
 			&aiSummaryStr,
 			&ev.SourceCount,
 			&ev.FirstSeenAt,
@@ -265,6 +270,11 @@ func (s *SQLStore) GetEvents(ctx context.Context, filter EventFilter) (*EventLis
 			&catSlug,
 		); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
+		}
+
+		if aiHeadline.Valid && strings.TrimSpace(aiHeadline.String) != "" {
+			headlineStr := aiHeadline.String
+			ev.AIHeadline = &headlineStr
 		}
 
 		ev.AISummary = aiSummaryStr
@@ -313,6 +323,7 @@ func (s *SQLStore) GetEventByID(ctx context.Context, id int64) (*EventDetail, er
 		SELECT 
 			ne.id,
 			ne.canonical_title,
+			ne.ai_headline,
 			coalesce(ne.ai_summary, ''),
 			ne.source_count,
 			ne.first_seen_at,
@@ -327,6 +338,7 @@ func (s *SQLStore) GetEventByID(ctx context.Context, id int64) (*EventDetail, er
 
 	var (
 		ev           EventDetail
+		aiHeadline   sql.NullString
 		catID        sql.NullInt64
 		catName      sql.NullString
 		catSlug      sql.NullString
@@ -336,6 +348,7 @@ func (s *SQLStore) GetEventByID(ctx context.Context, id int64) (*EventDetail, er
 	err := s.db.QueryRowContext(ctx, query, id).Scan(
 		&ev.ID,
 		&ev.CanonicalTitle,
+		&aiHeadline,
 		&aiSummaryStr,
 		&ev.SourceCount,
 		&ev.FirstSeenAt,
@@ -349,6 +362,11 @@ func (s *SQLStore) GetEventByID(ctx context.Context, id int64) (*EventDetail, er
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("query event by id: %w", err)
+	}
+
+	if aiHeadline.Valid && strings.TrimSpace(aiHeadline.String) != "" {
+		headlineStr := aiHeadline.String
+		ev.AIHeadline = &headlineStr
 	}
 
 	ev.AISummary = aiSummaryStr
@@ -477,8 +495,9 @@ func (s *SQLStore) SearchEvents(ctx context.Context, query string, limit, offset
 		LEFT JOIN categories c ON ne.category_id = c.id
 		WHERE ne.status = 'active'
 		  AND (
-		    to_tsvector('simple', ne.canonical_title || ' ' || coalesce(ne.ai_summary, '')) @@ plainto_tsquery('simple', $1)
+		    to_tsvector('simple', ne.canonical_title || ' ' || coalesce(ne.ai_headline, '') || ' ' || coalesce(ne.ai_summary, '')) @@ plainto_tsquery('simple', $1)
 		    OR ne.canonical_title ILIKE '%' || $1 || '%'
+		    OR coalesce(ne.ai_headline, '') ILIKE '%' || $1 || '%'
 		    OR coalesce(ne.ai_summary, '') ILIKE '%' || $1 || '%'
 		  )
 	`
@@ -501,6 +520,7 @@ func (s *SQLStore) SearchEvents(ctx context.Context, query string, limit, offset
 		SELECT 
 			ne.id,
 			ne.canonical_title,
+			ne.ai_headline,
 			coalesce(ne.ai_summary, ''),
 			ne.source_count,
 			ne.first_seen_at,
@@ -512,12 +532,13 @@ func (s *SQLStore) SearchEvents(ctx context.Context, query string, limit, offset
 		LEFT JOIN categories c ON ne.category_id = c.id
 		WHERE ne.status = 'active'
 		  AND (
-		    to_tsvector('simple', ne.canonical_title || ' ' || coalesce(ne.ai_summary, '')) @@ plainto_tsquery('simple', $1)
+		    to_tsvector('simple', ne.canonical_title || ' ' || coalesce(ne.ai_headline, '') || ' ' || coalesce(ne.ai_summary, '')) @@ plainto_tsquery('simple', $1)
 		    OR ne.canonical_title ILIKE '%' || $1 || '%'
+		    OR coalesce(ne.ai_headline, '') ILIKE '%' || $1 || '%'
 		    OR coalesce(ne.ai_summary, '') ILIKE '%' || $1 || '%'
 		  )
 		ORDER BY 
-		  ts_rank_cd(to_tsvector('simple', ne.canonical_title || ' ' || coalesce(ne.ai_summary, '')), plainto_tsquery('simple', $1)) DESC,
+		  ts_rank_cd(to_tsvector('simple', ne.canonical_title || ' ' || coalesce(ne.ai_headline, '') || ' ' || coalesce(ne.ai_summary, '')), plainto_tsquery('simple', $1)) DESC,
 		  ne.last_updated_at DESC, 
 		  ne.id DESC
 		LIMIT $2 OFFSET $3
@@ -535,6 +556,7 @@ func (s *SQLStore) SearchEvents(ctx context.Context, query string, limit, offset
 	for rows.Next() {
 		var (
 			ev           EventSummary
+			aiHeadline   sql.NullString
 			catID        sql.NullInt64
 			catName      sql.NullString
 			catSlug      sql.NullString
@@ -544,6 +566,7 @@ func (s *SQLStore) SearchEvents(ctx context.Context, query string, limit, offset
 		if err := rows.Scan(
 			&ev.ID,
 			&ev.CanonicalTitle,
+			&aiHeadline,
 			&aiSummaryStr,
 			&ev.SourceCount,
 			&ev.FirstSeenAt,
@@ -553,6 +576,11 @@ func (s *SQLStore) SearchEvents(ctx context.Context, query string, limit, offset
 			&catSlug,
 		); err != nil {
 			return nil, fmt.Errorf("scan search event: %w", err)
+		}
+
+		if aiHeadline.Valid && strings.TrimSpace(aiHeadline.String) != "" {
+			headlineStr := aiHeadline.String
+			ev.AIHeadline = &headlineStr
 		}
 
 		ev.AISummary = aiSummaryStr

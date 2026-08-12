@@ -3,6 +3,8 @@ services:
     image: pgvector/pgvector:pg16
     container_name: efi_postgres
     restart: unless-stopped
+    env_file:
+      - ../.env
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -28,14 +30,7 @@ services:
     env_file:
       - ../.env
     environment:
-      APP_DATABASE_URL: postgres://${APP_DB_USER:-efi_app}:${APP_DB_PASSWORD:-efi_app_pass}@postgres:5432/${POSTGRES_DB:-efi_dev}?sslmode=disable
-      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
-      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
-      TELEGRAM_SESSION_STRING: ${TELEGRAM_SESSION_STRING:-}
-      TELEGRAM_CHANNELS: ${TELEGRAM_CHANNELS:-}
-      RECONNECT_DELAY_SECONDS: ${RECONNECT_DELAY_SECONDS:-5}
-      MAX_RECONNECT_RETRIES: ${MAX_RECONNECT_RETRIES:-10}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      APP_DATABASE_URL: postgres://efi_app:efi_app_pass@postgres:5432/efi_dev?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,20 +44,7 @@ services:
     env_file:
       - ../.env
     environment:
-      APP_DATABASE_URL: postgres://${APP_DB_USER:-efi_app}:${APP_DB_PASSWORD:-efi_app_pass}@postgres:5432/${POSTGRES_DB:-efi_dev}?sslmode=disable
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      EMBEDDING_HIGH_THRESHOLD: ${EMBEDDING_HIGH_THRESHOLD:-0.82}
-      EMBEDDING_LOW_THRESHOLD: ${EMBEDDING_LOW_THRESHOLD:-0.65}
-      MAX_EMBEDDING_RETRIES: ${MAX_EMBEDDING_RETRIES:-3}
-      LLM_MODEL: ${LLM_MODEL:-gemini-flash-latest}
-      VERIFY_CONFIDENCE_THRESHOLD: ${VERIFY_CONFIDENCE_THRESHOLD:-0.75}
-      STABILITY_WINDOW_MINUTES: ${STABILITY_WINDOW_MINUTES:-15}
-      MAX_LLM_RETRIES: ${MAX_LLM_RETRIES:-3}
-      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-2}
-      BATCH_SIZE: ${BATCH_SIZE:-50}
-      SIMHASH_THRESHOLD: ${SIMHASH_THRESHOLD:-10}
-      CLUSTERING_WINDOW_HOURS: ${CLUSTERING_WINDOW_HOURS:-48}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      APP_DATABASE_URL: postgres://efi_app:efi_app_pass@postgres:5432/efi_dev?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
@@ -76,15 +58,10 @@ services:
     env_file:
       - ../.env
     environment:
-      API_DATABASE_URL: postgres://${API_DB_USER:-efi_api}:${API_DB_PASSWORD:-efi_api_pass}@postgres:5432/${POSTGRES_DB:-efi_dev}?sslmode=disable
-      API_PORT: ${API_PORT:-8080}
-      RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-10}
-      RATE_LIMIT_BURST: ${RATE_LIMIT_BURST:-20}
-      MAX_PAGINATION_LIMIT: ${MAX_PAGINATION_LIMIT:-50}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      API_DATABASE_URL: postgres://efi_api:efi_api_pass@postgres:5432/efi_dev?sslmode=disable
+      API_PORT: "8080"
     ports:
-      - "${API_PORT:-8080}:8080"
+      - "8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -99,10 +76,10 @@ services:
       - ../.env
     environment:
       INTERNAL_API_URL: http://api:8080
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
+      NEXT_PUBLIC_API_URL: http://localhost:8080
       NODE_ENV: production
     ports:
-      - "${WEB_PORT:-3000}:3000"
+      - "3000:3000"
     depends_on:
       api:
         condition: service_started
@@ -110,4 +87,5 @@ services:
 volumes:
   postgres_data:
     driver: local
+
 

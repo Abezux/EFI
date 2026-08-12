@@ -66,4 +66,31 @@ describe('EventCard Component', () => {
     render(<EventCard event={unsummarizedEvent} />);
     expect(screen.queryByTestId('ai-summary-badge')).not.toBeInTheDocument();
   });
+
+  it('renders ai_headline instead of canonical_title when ai_headline is present', () => {
+    const enrichedEvent: NewsEvent = {
+      ...mockEvent,
+      ai_headline: 'National Bank Liberalizes Foreign Exchange Rules for Importers',
+    };
+    render(<EventCard event={enrichedEvent} />);
+    expect(
+      screen.getByText(
+        'National Bank Liberalizes Foreign Exchange Rules for Importers'
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('National Bank FX Directive 2026')
+    ).not.toBeInTheDocument();
+  });
+
+  it('falls back to canonical_title when ai_headline is null or empty', () => {
+    const fallbackEvent: NewsEvent = {
+      ...mockEvent,
+      ai_headline: null,
+    };
+    render(<EventCard event={fallbackEvent} />);
+    expect(
+      screen.getByText('National Bank FX Directive 2026')
+    ).toBeInTheDocument();
+  });
 });

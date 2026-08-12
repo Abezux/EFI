@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -95,7 +96,8 @@ func TestGeminiLLMClient_EnrichEvent_Success(t *testing.T) {
 						Parts: []geminiPartGen{
 							{
 								Text: `{
-									"ai_summary": "The National Bank of Ethiopia raised minimum capital for commercial banks to 5 billion birr.",
+									"ai_headline": "National Bank of Ethiopia Raises Commercial Bank Minimum Capital Requirement to 5 Billion Birr",
+									"ai_summary": "The National Bank of Ethiopia (NBE) has officially issued a directive raising the minimum capital requirement for all commercial banks operating in the country to 5 billion birr.\n\nAccording to central bank leadership, this measure aims to strengthen financial stability and improve risk absorption capacity across the banking system. \"This capitalization mandate will fortify domestic institutions against macroeconomic volatility,\" per Capital Ethiopia.",
 									"category": "Banking & Finance",
 									"entities": [
 										{"name": "National Bank of Ethiopia", "type": "organization"},
@@ -122,6 +124,9 @@ func TestGeminiLLMClient_EnrichEvent_Success(t *testing.T) {
 		t.Fatalf("EnrichEvent returned error: %v", err)
 	}
 
+	if res.AIHeadline != "National Bank of Ethiopia Raises Commercial Bank Minimum Capital Requirement to 5 Billion Birr" {
+		t.Errorf("unexpected ai_headline: %q", res.AIHeadline)
+	}
 	if res.Category != "Banking & Finance" {
 		t.Errorf("expected category 'Banking & Finance', got %q", res.Category)
 	}
@@ -130,5 +135,64 @@ func TestGeminiLLMClient_EnrichEvent_Success(t *testing.T) {
 	}
 	if res.Entities[0].Name != "National Bank of Ethiopia" || res.Entities[0].Type != "organization" {
 		t.Errorf("unexpected entity: %+v", res.Entities[0])
+	}
+}
+
+func TestGeminiLLMClient_EnrichEvent_PromptCompliance(t *testing.T) {
+	var capturedPrompt string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req geminiGenerateRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if len(req.Contents) > 0 && len(req.Contents[0].Parts) > 0 {
+			capturedPrompt = req.Contents[0].Parts[0].Text
+		}
+
+		mockResp := geminiGenerateResponse{
+			Candidates: []geminiCandidate{
+				{
+					Content: struct {
+						Parts []geminiPartGen `json:"parts"`
+					}{
+						Parts: []geminiPartGen{
+							{
+								Text: `{"ai_headline": "Test Headline", "ai_summary": "Test summary", "category": "Banking & Finance", "entities": []}`,
+							},
+						},
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(mockResp)
+	}))
+	defer ts.Close()
+
+	client := NewGeminiLLMClient("test-key")
+	client.baseURL = ts.URL
+
+	sources := []string{
+		"[Source 1 — Capital Ethiopia (@Capitalethiopia)]\nNBE increased reserve requirements.",
+		"[Source 2 — Addis Fortune (@addisfortune)]\nBanks react to the new NBE directives.",
+	}
+	_, err := client.EnrichEvent(context.Background(), sources, []string{"Banking & Finance"})
+	if err != nil {
+		t.Fatalf("EnrichEvent error: %v", err)
+	}
+
+	// Verify required V4.1 prompt elements per spec
+	requiredPhrases := []string{
+		"ai_headline",
+		"ai_summary",
+		"STRICT FACTUALITY & ANTI-HALLUCINATION",
+		"Do NOT invent, assume, extrapolate",
+		"PRESERVE IT VERBATIM",
+		"Capital Ethiopia",
+		"Addis Fortune",
+	}
+
+	for _, phrase := range requiredPhrases {
+		if !strings.Contains(capturedPrompt, phrase) {
+			t.Errorf("expected prompt to contain %q, but was missing in:\n%s", phrase, capturedPrompt)
+		}
 	}
 }

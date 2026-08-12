@@ -559,12 +559,14 @@ func (s *Store) FetchStableEventsForEnrichment(ctx context.Context, stabilityWin
 	return events, nil
 }
 
-// FetchEventSourceTexts retrieves normalized texts from raw_posts attached to the given news_event.
+// FetchEventSourceTexts retrieves unnormalized raw texts from raw_posts attached to the given news_event,
+// formatted with channel attribution metadata so direct quotes can be preserved and attributed.
 func (s *Store) FetchEventSourceTexts(ctx context.Context, eventID int64) ([]string, error) {
 	query := `
-		SELECT COALESCE(NULLIF(rp.normalized_text, ''), rp.raw_text)
+		SELECT COALESCE(c.name, ''), COALESCE(c.handle, ''), rp.raw_text
 		FROM event_sources es
 		JOIN raw_posts rp ON es.raw_post_id = rp.id
+		LEFT JOIN channels c ON rp.channel_id = c.id
 		WHERE es.event_id = $1
 		ORDER BY es.added_at ASC
 	`
@@ -575,12 +577,29 @@ func (s *Store) FetchEventSourceTexts(ctx context.Context, eventID int64) ([]str
 	defer rows.Close()
 
 	var texts []string
+	idx := 1
 	for rows.Next() {
-		var txt string
-		if err := rows.Scan(&txt); err != nil {
+		var name, handle, rawText string
+		if err := rows.Scan(&name, &handle, &rawText); err != nil {
 			return nil, fmt.Errorf("scan source text: %w", err)
 		}
-		texts = append(texts, txt)
+		rawText = strings.TrimSpace(rawText)
+		if rawText == "" {
+			continue
+		}
+
+		var header string
+		if name != "" {
+			if handle != "" {
+				header = fmt.Sprintf("[Source %d — %s (@%s)]", idx, name, handle)
+			} else {
+				header = fmt.Sprintf("[Source %d — %s]", idx, name)
+			}
+		} else {
+			header = fmt.Sprintf("[Source %d]", idx)
+		}
+		texts = append(texts, fmt.Sprintf("%s\n%s", header, rawText))
+		idx++
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows error: %w", err)
@@ -610,12 +629,13 @@ func (s *Store) FetchCategories(ctx context.Context) (map[string]int, []string, 
 	return catMap, catNames, nil
 }
 
-// SaveEnrichmentWithAudit transactionally writes ai_summary, category_id, extracted entities,
+// SaveEnrichmentWithAudit transactionally writes ai_headline, ai_summary, category_id, extracted entities,
 // updates last_enriched_at, and writes a processing_audit record.
 func (s *Store) SaveEnrichmentWithAudit(
 	ctx context.Context,
 	eventID int64,
 	categoryID *int,
+	aiHeadline string,
 	aiSummary string,
 	entities []ExtractedEntity,
 	audit AuditEntry,
@@ -626,14 +646,20 @@ func (s *Store) SaveEnrichmentWithAudit(
 	}
 	defer tx.Rollback() // nolint:errcheck
 
+	var headlineParam sql.NullString
+	if trimmed := strings.TrimSpace(aiHeadline); trimmed != "" {
+		headlineParam = sql.NullString{String: trimmed, Valid: true}
+	}
+
 	updateEventQuery := `
 		UPDATE news_events
-		SET ai_summary = $1,
-		    category_id = $2,
+		SET ai_headline = $1,
+		    ai_summary = $2,
+		    category_id = $3,
 		    last_enriched_at = NOW()
-		WHERE id = $3
+		WHERE id = $4
 	`
-	if _, err := tx.ExecContext(ctx, updateEventQuery, aiSummary, categoryID, eventID); err != nil {
+	if _, err := tx.ExecContext(ctx, updateEventQuery, headlineParam, aiSummary, categoryID, eventID); err != nil {
 		return fmt.Errorf("update news_events enrichment: %w", err)
 	}
 

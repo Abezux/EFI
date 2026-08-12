@@ -25,8 +25,9 @@ export async function generateMetadata({
     if (!event) {
       return { title: 'Event Not Found' };
     }
+    const headline = (event.ai_headline && event.ai_headline.trim()) || event.canonical_title;
     return {
-      title: `${event.canonical_title} — Ethiopia Financial News`,
+      title: `${headline} — Ethiopia Financial News`,
       description:
         event.ai_summary ||
         `Verified financial event aggregated from ${event.source_count} source reports.`,
@@ -66,6 +67,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
   }
 
   const timeAgo = formatTimeAgo(event.last_updated_at || event.first_seen_at);
+  const headline = (event.ai_headline && event.ai_headline.trim()) || event.canonical_title;
 
   return (
     <article style={{ maxWidth: '840px', margin: '0 auto' }}>
@@ -135,7 +137,7 @@ export default async function EventDetailPage({ params }: EventDetailPageProps) 
             marginBottom: '1rem',
           }}
         >
-          {event.canonical_title}
+          {headline}
         </h1>
 
         <div

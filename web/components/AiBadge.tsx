@@ -26,6 +26,11 @@ interface AiSummaryBoxProps {
 export function AiSummaryBox({ summary, isAiGenerated }: AiSummaryBoxProps) {
   if (!summary) return null;
 
+  const paragraphs = summary
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0);
+
   return (
     <section className="ai-summary-box" aria-labelledby="ai-summary-heading">
       <div className="ai-summary-header">
@@ -36,7 +41,13 @@ export function AiSummaryBox({ summary, isAiGenerated }: AiSummaryBoxProps) {
           {isAiGenerated && <AiBadge />}
         </div>
       </div>
-      <p className="ai-summary-text">{summary}</p>
+      <div className="ai-summary-content">
+        {paragraphs.map((para, idx) => (
+          <p key={idx} className="ai-summary-text" data-testid={`ai-summary-p-${idx}`}>
+            {para}
+          </p>
+        ))}
+      </div>
       {isAiGenerated && (
         <div className="ai-summary-disclaimer">
           <Info size={13} />
