@@ -11,6 +11,7 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ../db/migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-efi_dev}"]
       interval: 5s
@@ -24,6 +25,8 @@ services:
       dockerfile: services/listener/Dockerfile
     container_name: efi_listener
     restart: unless-stopped
+    env_file:
+      - ../.env
     environment:
       APP_DATABASE_URL: postgres://${APP_DB_USER:-efi_app}:${APP_DB_PASSWORD:-efi_app_pass}@postgres:5432/${POSTGRES_DB:-efi_dev}?sslmode=disable
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
@@ -43,6 +46,8 @@ services:
       dockerfile: Dockerfile
     container_name: efi_processor
     restart: unless-stopped
+    env_file:
+      - ../.env
     environment:
       APP_DATABASE_URL: postgres://${APP_DB_USER:-efi_app}:${APP_DB_PASSWORD:-efi_app_pass}@postgres:5432/${POSTGRES_DB:-efi_dev}?sslmode=disable
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
@@ -68,6 +73,8 @@ services:
       dockerfile: Dockerfile
     container_name: efi_api
     restart: unless-stopped
+    env_file:
+      - ../.env
     environment:
       API_DATABASE_URL: postgres://${API_DB_USER:-efi_api}:${API_DB_PASSWORD:-efi_api_pass}@postgres:5432/${POSTGRES_DB:-efi_dev}?sslmode=disable
       API_PORT: ${API_PORT:-8080}
@@ -82,6 +89,25 @@ services:
       postgres:
         condition: service_healthy
 
+  web:
+    build:
+      context: ../web
+      dockerfile: Dockerfile
+    container_name: efi_web
+    restart: unless-stopped
+    env_file:
+      - ../.env
+    environment:
+      INTERNAL_API_URL: http://api:8080
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
+      NODE_ENV: production
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_started
+
 volumes:
   postgres_data:
     driver: local
+

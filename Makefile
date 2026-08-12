@@ -44,16 +44,27 @@ format-python:
 		black services/listener/ && ruff check --fix services/listener/; \
 	fi
 
-# Run all tests (Go, Python, Fixtures)
-test: test-python
+# Run Web tests
+test-web:
+	@echo "Running Next.js web tests..."
+	@cd web && npx jest
+
+# Run Web lint and typecheck
+lint-web:
+	@echo "Running Next.js lint & typecheck..."
+	@cd web && npm run typecheck && npm run lint
+
+# Run all tests (Go, Python, Web, Fixtures)
+test: test-python test-web
 	@echo "Running fixture and Go tests..."
 	@python3 tests/validate_fixtures.py
 	@which go >/dev/null 2>&1 && go test -v ./... || true
 
 # Run all lint checks
-lint: lint-python
+lint: lint-python lint-web
 	@echo "Running Go linter..."
 	@which golangci-lint >/dev/null 2>&1 && golangci-lint run ./... || echo "golangci-lint not installed locally; will run in CI."
 
 # Run full local validation
 validate: lint test
+

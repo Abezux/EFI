@@ -164,3 +164,15 @@ If you encounter:
 - **Middleware & Security Baseline**: The public API service must enforce per-IP token bucket rate limiting (returning HTTP 429 with `Retry-After`), CORS headers, panic recovery (returning clean HTTP 500 JSON without service interruption), and structured JSON request logging.
 - **V6 Boundary**: V5 is strictly limited to the read-only REST API. Real-time Server-Sent Events (SSE) streaming and web frontend clients are deferred to V6.
 
+---
+
+## 15. V6 Addendum — Web Frontend (Next.js & App Router)
+
+- **TypeScript & React Standards**: Code in `web/` must be written in TypeScript, formatted cleanly, pass ESLint (`next/core-web-vitals`) with zero errors, and include comprehensive unit and component tests using Jest and React Testing Library.
+- **AI Transparency Invariant**: Every page or component rendering an AI-synthesized summary must display a clear, accessible visual indicator (`AiBadge`, "AI-Generated Summary") and disclaimer whenever `ai_summary_generated: true`.
+- **Source Attribution & Bounded Excerpts**: All source channel reports must clearly attribute channel name and handle, and show bounded excerpts (<= 160 runes) linking to primary Telegram channels.
+- **Dual-Context API Client**: The API client in `lib/api.ts` must correctly resolve `INTERNAL_API_URL` (for server-side rendering within container networks) and `NEXT_PUBLIC_API_URL` (for client-side polling in browsers).
+- **Graceful Error Handling & Silent Polling Degradation**: Server-rendered pages must display clean fallback error banners if the API is temporarily unreachable. Background polling (`LiveFeedUpdater`) must fail silently without user disruption and back off exponentially on network errors.
+- **V7 Boundary**: V6 is strictly limited to the web frontend client. Real-time Server-Sent Events (SSE) streaming, push notifications, and administrative moderation tools are deferred to V7+.
+
+

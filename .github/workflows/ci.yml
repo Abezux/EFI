@@ -107,7 +107,33 @@ jobs:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/efi_dev?sslmode=disable
         run: go test -v ./...
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: web/package.json
+
+      - name: Install Web Dependencies
+        working-directory: web
+        run: npm install --ignore-scripts
+
+      - name: Run Web Lint & Typecheck
+        working-directory: web
+        run: |
+          npm run typecheck
+          npm run lint
+
+      - name: Run Web Tests (Jest)
+        working-directory: web
+        run: npx jest
+
+      - name: Build Web Application
+        working-directory: web
+        run: npm run build
+
       - name: Run Python Fixture Validation
         run: python3 tests/validate_fixtures.py
+
 
 
