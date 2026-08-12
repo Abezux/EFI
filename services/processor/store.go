@@ -184,6 +184,12 @@ func (s *Store) CreateEvent(
 		return 0, fmt.Errorf("update raw_posts: %w", err)
 	}
 
+	// Broadcast notification on news_events_channel within the same transaction
+	notifyPayload := fmt.Sprintf(`{"type":"new_event","event_id":%d}`, eventID)
+	if _, err := tx.ExecContext(ctx, "SELECT pg_notify('news_events_channel', $1)", notifyPayload); err != nil {
+		return 0, fmt.Errorf("notify news_events_channel: %w", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit tx: %w", err)
 	}
@@ -247,6 +253,12 @@ func (s *Store) AttachToEvent(
 	`
 	if _, err := tx.ExecContext(ctx, updateEventQuery, eventID, post.PostedAt); err != nil {
 		return fmt.Errorf("update news_events: %w", err)
+	}
+
+	// Broadcast notification on news_events_channel within the same transaction
+	notifyPayload := fmt.Sprintf(`{"type":"event_updated","event_id":%d}`, eventID)
+	if _, err := tx.ExecContext(ctx, "SELECT pg_notify('news_events_channel', $1)", notifyPayload); err != nil {
+		return fmt.Errorf("notify news_events_channel: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -446,6 +458,12 @@ func (s *Store) AttachToEventWithAudit(
 		return fmt.Errorf("insert processing_audit: %w", err)
 	}
 
+	// Broadcast notification on news_events_channel within the same transaction
+	notifyPayload := fmt.Sprintf(`{"type":"event_updated","event_id":%d}`, eventID)
+	if _, err := tx.ExecContext(ctx, "SELECT pg_notify('news_events_channel', $1)", notifyPayload); err != nil {
+		return fmt.Errorf("notify news_events_channel: %w", err)
+	}
+
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit tx: %w", err)
 	}
@@ -500,6 +518,12 @@ func (s *Store) CreateEventWithAudit(
 	`
 	if _, err := tx.ExecContext(ctx, auditQuery, audit.RawPostID, eventID, audit.Stage, audit.Decision, audit.Confidence, audit.ModelUsed, audit.RawResponse); err != nil {
 		return 0, fmt.Errorf("insert processing_audit: %w", err)
+	}
+
+	// Broadcast notification on news_events_channel within the same transaction
+	notifyPayload := fmt.Sprintf(`{"type":"new_event","event_id":%d}`, eventID)
+	if _, err := tx.ExecContext(ctx, "SELECT pg_notify('news_events_channel', $1)", notifyPayload); err != nil {
+		return 0, fmt.Errorf("notify news_events_channel: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -700,6 +724,12 @@ func (s *Store) SaveEnrichmentWithAudit(
 	`
 	if _, err := tx.ExecContext(ctx, auditQuery, audit.RawPostID, eventID, audit.Stage, audit.Decision, audit.Confidence, audit.ModelUsed, audit.RawResponse); err != nil {
 		return fmt.Errorf("insert processing_audit: %w", err)
+	}
+
+	// Broadcast notification on news_events_channel within the same transaction
+	notifyPayload := fmt.Sprintf(`{"type":"event_updated","event_id":%d}`, eventID)
+	if _, err := tx.ExecContext(ctx, "SELECT pg_notify('news_events_channel', $1)", notifyPayload); err != nil {
+		return fmt.Errorf("notify news_events_channel: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {

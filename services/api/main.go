@@ -50,15 +50,32 @@ func main() {
 		logger.Info("Database connection established as efi_api", initCorrID, nil)
 	}
 
+	// Initialize real-time SSE Hub and connection limiter
+	hub := NewSSEHub(logger)
+	go hub.Run(context.Background())
+	defer hub.Stop()
+
+	sseLimiter := NewSSEConnectionLimiter(cfg.MaxSSEPerIP)
+
+	// Initialize and start Postgres LISTEN subscriber on news_events_channel
+	notifyListener := NewNotifyListener(cfg.DatabaseURL, "news_events_channel", hub, logger)
+	if err := notifyListener.Start(context.Background()); err != nil {
+		logger.Warn("Failed to start Postgres LISTEN subscriber (will continue with REST API)", initCorrID, map[string]any{
+			"error": err.Error(),
+		})
+	} else {
+		logger.Info("Postgres LISTEN subscriber active on news_events_channel", initCorrID, nil)
+	}
+	defer notifyListener.Close()
+
 	// Build HTTP router
-	router := SetupRouter(cfg, store, logger)
+	router := SetupRouter(cfg, store, hub, sseLimiter, logger)
 
 	srv := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Port),
-		Handler:      router,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Addr:        fmt.Sprintf(":%d", cfg.Port),
+		Handler:     router,
+		ReadTimeout: 10 * time.Second,
+		IdleTimeout: 60 * time.Second,
 	}
 
 	// Server shutdown channel
@@ -74,6 +91,9 @@ func main() {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+
+		_ = notifyListener.Close()
+		hub.Stop()
 
 		if err := srv.Shutdown(ctx); err != nil {
 			logger.Error("Graceful shutdown failed", shutdownCorrID, map[string]any{

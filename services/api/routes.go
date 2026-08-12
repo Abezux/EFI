@@ -5,7 +5,7 @@ import (
 )
 
 // SetupRouter configures all HTTP routes, middleware, and handlers.
-func SetupRouter(cfg *Config, store StoreReader, logger *Logger) http.Handler {
+func SetupRouter(cfg *Config, store StoreReader, hub *SSEHub, sseLimiter *SSEConnectionLimiter, logger *Logger) http.Handler {
 	mux := http.NewServeMux()
 
 	// 1. Health check (unauthenticated, operational probe)
@@ -16,6 +16,11 @@ func SetupRouter(cfg *Config, store StoreReader, logger *Logger) http.Handler {
 	mux.HandleFunc("GET /api/v1/events/{id}", GetEventHandler(store, logger))
 	mux.HandleFunc("GET /api/v1/categories", ListCategoriesHandler(store, logger))
 	mux.HandleFunc("GET /api/v1/search", SearchHandler(store, cfg.MaxPaginationLimit, logger))
+
+	// 3. V7 Real-Time SSE Stream endpoint
+	if hub != nil && sseLimiter != nil {
+		mux.HandleFunc("GET /api/v1/stream", StreamHandler(hub, sseLimiter, logger))
+	}
 
 	// Middleware stack: RateLimit -> CORS -> RequestLogger -> PanicRecovery
 	limiter := NewIPRateLimiter(cfg.RateLimitRPS, cfg.RateLimitBurst)

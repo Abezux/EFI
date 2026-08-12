@@ -175,4 +175,14 @@ If you encounter:
 - **Graceful Error Handling & Silent Polling Degradation**: Server-rendered pages must display clean fallback error banners if the API is temporarily unreachable. Background polling (`LiveFeedUpdater`) must fail silently without user disruption and back off exponentially on network errors.
 - **V7 Boundary**: V6 is strictly limited to the web frontend client. Real-time Server-Sent Events (SSE) streaming, push notifications, and administrative moderation tools are deferred to V7+.
 
+---
+
+## 16. V7 Addendum — Real-Time Delivery (SSE & Postgres LISTEN/NOTIFY)
+
+- **Application-Level NOTIFY Invariant (ADR-0011)**: Every code path in `services/processor/store.go` that creates a `news_events` row (`CreateEvent`), attaches a new source to an existing event (`AttachToEvent`), or writes an enriched summary (`SaveEventEnrichment`) MUST execute an explicit transaction-coupled `pg_notify('news_events_channel', ...)` call carrying minimal payload (`{"type":"new_event"|"event_updated","event_id":<id>}`). Database triggers for NOTIFY are explicitly prohibited.
+- **Resource Management & Goroutine Leak Prevention**: The API SSE hub (`services/api/sse.go`) must manage client lifecycles defensively. Dropped or closed connections must be promptly unregistered, channels closed without panicking, and per-IP concurrent connection limits enforced (`MAX_SSE_PER_IP`).
+- **Self-Healing LISTEN Subscriber**: The Postgres `LISTEN` subscriber (`services/api/notify_listener.go`) is the single pipeline bridge for real-time delivery. It must handle connection drops with exponential reconnection backoff, emit structured JSON connection status logs, and safely recover without crashing the API service.
+- **Graceful Client Degradation**: The web client (`LiveFeedUpdater.tsx`) must gracefully handle SSE disconnects and errors, displaying visible reconnection status when disconnected while allowing the application to function seamlessly via standard SSR and page navigation.
+- **V8 Boundary**: V7 is strictly limited to real-time SSE streaming. Search engine optimization (SEO), OpenGraph metadata generation, RSS/Atom feeds, and sitemaps are deferred to V8.
+
 

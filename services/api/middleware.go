@@ -22,6 +22,12 @@ func (rw *responseWriterWrapper) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
+func (rw *responseWriterWrapper) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // RequestLoggerMiddleware logs every HTTP request as structured JSON.
 func RequestLoggerMiddleware(logger *Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {

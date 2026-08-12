@@ -42,6 +42,7 @@ type Config struct {
 	RateLimitBurst     int
 	CORSAllowedOrigins string
 	MaxPaginationLimit int
+	MaxSSEPerIP        int
 	LogLevel           string
 	Environment        string
 }
@@ -108,6 +109,13 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("no database URL configured for API service")
 	}
 
+	maxSSEPerIP := 5
+	if val := os.Getenv("MAX_SSE_PER_IP"); val != "" {
+		if s, err := strconv.Atoi(val); err == nil && s > 0 {
+			maxSSEPerIP = s
+		}
+	}
+
 	return &Config{
 		Port:               port,
 		DatabaseURL:        dbURL,
@@ -115,6 +123,7 @@ func LoadConfig() (*Config, error) {
 		RateLimitBurst:     rateLimitBurst,
 		CORSAllowedOrigins: corsOrigins,
 		MaxPaginationLimit: maxLimit,
+		MaxSSEPerIP:        maxSSEPerIP,
 		LogLevel:           logLevel,
 		Environment:        env,
 	}, nil
