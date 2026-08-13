@@ -128,21 +128,25 @@ func TestCORSMiddleware(t *testing.T) {
 		if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
 			t.Errorf("expected Access-Control-Allow-Origin: *")
 		}
-		if rec.Header().Get("Access-Control-Allow-Methods") != "GET, OPTIONS" {
-			t.Errorf("expected Access-Control-Allow-Methods: GET, OPTIONS")
+		if rec.Header().Get("Access-Control-Allow-Methods") != "GET, POST, PATCH, DELETE, OPTIONS" {
+			t.Errorf("expected Access-Control-Allow-Methods: GET, POST, PATCH, DELETE, OPTIONS")
 		}
 	})
 
-	t.Run("GET request with CORS", func(t *testing.T) {
+	t.Run("GET request with CORS origin reflection", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
+		req.Header.Set("Origin", "http://localhost:3000")
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusOK {
 			t.Errorf("expected status 200, got %d", rec.Code)
 		}
-		if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
-			t.Errorf("expected Access-Control-Allow-Origin: *")
+		if rec.Header().Get("Access-Control-Allow-Origin") != "http://localhost:3000" {
+			t.Errorf("expected Access-Control-Allow-Origin: http://localhost:3000")
+		}
+		if rec.Header().Get("Access-Control-Allow-Credentials") != "true" {
+			t.Errorf("expected Access-Control-Allow-Credentials: true")
 		}
 	})
 }

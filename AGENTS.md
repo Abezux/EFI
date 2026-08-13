@@ -196,7 +196,15 @@ If you encounter:
   - Legacy routes (`/events/{id}`) and mismatched category/slug requests must return HTTP 301 permanent redirects (`permanentRedirect`) to the canonical URL.
 - **Truthful Structured Data**: `NewsArticle` JSON-LD schema must reflect real, verified data from the database and API. Fabricating missing metadata (such as invented author persons or nonexistent article image URLs) is strictly prohibited.
 - **Sitemap & Robots Guardrails**: `sitemap.xml` dynamically lists only published events (`status = 'active'`) and category routes. Ambiguous posts in `needs_review` must never be leaked or included in public sitemaps.
-- **V9 Boundary**: V8 is strictly limited to SEO, canonical URLs, structured data, and sitemaps. Administrative moderation interfaces, analytics dashboards, and multi-tenant authentication are deferred to V9+.
+- **V9.1 Boundary**: V8 is strictly limited to SEO, canonical URLs, structured data, and sitemaps. Administrative moderation interfaces, analytics dashboards, and multi-tenant authentication are deferred to V9.1+.
 
+---
 
+## 18. V9.1 Addendum — Admin Panel & Moderation Workflow
 
+- **Authentication & Session Security (ADR-0014)**: Admin authentication uses bcrypt password hashing and stateful PostgreSQL sessions (`admin_sessions`). Session tokens are transmitted strictly via `httpOnly`, `Secure`, and `SameSite=Strict` cookies (`efi_session`) with a 24-hour lifetime. All mutating admin requests (`POST`, `DELETE`) require an `X-CSRF-Token` header. Login is rate-limited to 5 attempts per 15 minutes per IP.
+- **Zero-Registration & Seed Provisioning**: No public registration or user creation endpoints exist. Initial administrator credentials must be provisioned strictly via the CLI tool `services/api/cmd/seed/admin_seed.go`.
+- **Soft-Takedown Isolation (`is_hidden`)**: Editorial moderation operates strictly via `news_events.is_hidden` (boolean). The pipeline clustering `status` (`active`, `needs_review`) is orthogonal and must never be mutated for editorial takedowns. All public API queries and search functions must enforce `WHERE ne.is_hidden = false` to guarantee zero data leakage.
+- **Mandatory Audit Trail**: Every administrative action (channel status change, event soft-takedown, event restoration, source detachment, and ambiguity queue resolution) requires a mandatory, non-empty human justification string recorded atomically in `admin_audit_log` and `processing_audit`.
+- **Ingestion Listener Gating**: The Python ingestion listener (`services/listener/`) must check `channels.is_active` and skip processing incoming messages from paused channels.
+- **Crawler Isolation**: The `/admin/` path and all administrative subroutes must remain disallowed in `robots.txt`.

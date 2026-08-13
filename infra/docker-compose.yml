@@ -59,6 +59,7 @@ services:
       - ../.env
     environment:
       API_DATABASE_URL: postgres://efi_api:efi_api_pass@postgres:5432/efi_dev?sslmode=disable
+      ADMIN_DATABASE_URL: postgres://efi_admin:efi_admin_pass@postgres:5432/efi_dev?sslmode=disable
       API_PORT: "8080"
     ports:
       - "8080:8080"

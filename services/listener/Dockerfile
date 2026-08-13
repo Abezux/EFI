@@ -17,9 +17,10 @@ RUN apt-get update && \
 COPY services/listener/requirements.txt /app/services/listener/requirements.txt
 RUN pip install --no-cache-dir -r /app/services/listener/requirements.txt
 
-# Copy service code
+# Copy service code and test fixtures
 COPY pyproject.toml /app/pyproject.toml
 COPY services /app/services
+COPY tests /app/tests
 
 # Create non-root system user for least privilege execution
 RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser && \

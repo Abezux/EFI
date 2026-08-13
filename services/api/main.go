@@ -68,8 +68,24 @@ func main() {
 	}
 	defer notifyListener.Close()
 
+	// Initialize admin session store and login rate limiter
+	sessionStore := NewMemorySessionStore()
+	adminRateLimiter := NewLoginRateLimiter()
+
+	// Initialize admin store using ADMIN_DATABASE_URL
+	adminStore, err := NewSQLStore(cfg.AdminDatabaseURL)
+	if err != nil {
+		logger.Warn("Failed to initialize admin database store (will fallback to read store)", initCorrID, map[string]any{
+			"error": err.Error(),
+		})
+		adminStore = store
+	} else {
+		defer adminStore.Close()
+		logger.Info("Admin database connection established as efi_admin", initCorrID, nil)
+	}
+
 	// Build HTTP router
-	router := SetupRouter(cfg, store, hub, sseLimiter, logger)
+	router := SetupRouter(cfg, store, adminStore, sessionStore, adminRateLimiter, hub, sseLimiter, logger)
 
 	srv := &http.Server{
 		Addr:        fmt.Sprintf(":%d", cfg.Port),

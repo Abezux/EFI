@@ -38,6 +38,7 @@ func loadDotEnv() {
 type Config struct {
 	Port               int
 	DatabaseURL        string
+	AdminDatabaseURL   string
 	RateLimitRPS       float64
 	RateLimitBurst     int
 	CORSAllowedOrigins string
@@ -67,6 +68,14 @@ func LoadConfig() (*Config, error) {
 	}
 	if dbURL == "" {
 		dbURL = "postgres://efi_api:efi_api_pass@localhost:5432/efi_dev?sslmode=disable"
+	}
+
+	adminDbURL := os.Getenv("ADMIN_DATABASE_URL")
+	if adminDbURL == "" {
+		adminDbURL = os.Getenv("APP_DATABASE_URL")
+	}
+	if adminDbURL == "" {
+		adminDbURL = "postgres://efi_admin:efi_admin_pass@localhost:5432/efi_dev?sslmode=disable"
 	}
 
 	rateLimitRPS := 10.0
@@ -119,6 +128,7 @@ func LoadConfig() (*Config, error) {
 	return &Config{
 		Port:               port,
 		DatabaseURL:        dbURL,
+		AdminDatabaseURL:   adminDbURL,
 		RateLimitRPS:       rateLimitRPS,
 		RateLimitBurst:     rateLimitBurst,
 		CORSAllowedOrigins: corsOrigins,

@@ -128,3 +128,14 @@ class Database:
                     # Message was already ingested previously (idempotent no-op)
                     return None
                 return int(row["id"])
+
+    def is_channel_active(self, channel_id: int) -> bool:
+        """Checks if a channel is currently active for message ingestion."""
+        query = "SELECT is_active FROM channels WHERE id = %(channel_id)s;"
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, {"channel_id": channel_id})
+                row = cur.fetchone()
+                if row is None:
+                    return False
+                return bool(row["is_active"])

@@ -180,8 +180,8 @@ func (s *SQLStore) GetEvents(ctx context.Context, filter EventFilter) (*EventLis
 	var args []any
 	argIdx := 1
 
-	// Strict filter: ONLY active events are returned (never needs_review)
-	whereClauses = append(whereClauses, "ne.status = 'active'")
+	// Strict filter: ONLY active and non-hidden events are returned (never needs_review or hidden)
+	whereClauses = append(whereClauses, "ne.status = 'active'", "ne.is_hidden = false")
 
 	if filter.CategorySlug != "" {
 		whereClauses = append(whereClauses, fmt.Sprintf("c.slug = $%d", argIdx))
@@ -338,7 +338,7 @@ func (s *SQLStore) GetEventByID(ctx context.Context, id int64) (*EventDetail, er
 			c.slug
 		FROM news_events ne
 		LEFT JOIN categories c ON ne.category_id = c.id
-		WHERE ne.id = $1 AND ne.status = 'active'
+		WHERE ne.id = $1 AND ne.status = 'active' AND ne.is_hidden = false
 	`
 
 	var (
@@ -442,7 +442,7 @@ func (s *SQLStore) GetCategories(ctx context.Context) ([]CategoryWithCount, erro
 			c.id,
 			c.name,
 			c.slug,
-			count(ne.id) FILTER (WHERE ne.status = 'active') as event_count
+			count(ne.id) FILTER (WHERE ne.status = 'active' AND ne.is_hidden = false) as event_count
 		FROM categories c
 		LEFT JOIN news_events ne ON ne.category_id = c.id
 		GROUP BY c.id, c.name, c.slug
@@ -500,6 +500,7 @@ func (s *SQLStore) SearchEvents(ctx context.Context, query string, limit, offset
 		FROM news_events ne
 		LEFT JOIN categories c ON ne.category_id = c.id
 		WHERE ne.status = 'active'
+		  AND ne.is_hidden = false
 		  AND (
 		    to_tsvector('simple', ne.canonical_title || ' ' || coalesce(ne.ai_headline, '') || ' ' || coalesce(ne.ai_summary, '')) @@ plainto_tsquery('simple', $1)
 		    OR ne.canonical_title ILIKE '%' || $1 || '%'
@@ -538,6 +539,7 @@ func (s *SQLStore) SearchEvents(ctx context.Context, query string, limit, offset
 		FROM news_events ne
 		LEFT JOIN categories c ON ne.category_id = c.id
 		WHERE ne.status = 'active'
+		  AND ne.is_hidden = false
 		  AND (
 		    to_tsvector('simple', ne.canonical_title || ' ' || coalesce(ne.ai_headline, '') || ' ' || coalesce(ne.ai_summary, '')) @@ plainto_tsquery('simple', $1)
 		    OR ne.canonical_title ILIKE '%' || $1 || '%'

@@ -90,14 +90,20 @@ func PanicRecoveryMiddleware(logger *Logger) func(http.Handler) http.Handler {
 
 // CORSMiddleware sets standard CORS headers and handles OPTIONS preflight.
 func CORSMiddleware(allowedOrigins string) func(http.Handler) http.Handler {
-	if allowedOrigins == "" {
-		allowedOrigins = "*"
-	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", allowedOrigins)
-			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Correlation-ID")
+			origin := r.Header.Get("Origin")
+			if origin != "" {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			} else if allowedOrigins != "" {
+				w.Header().Set("Access-Control-Allow-Origin", allowedOrigins)
+			} else {
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+			}
+
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Correlation-ID, X-CSRF-Token")
 			w.Header().Set("Access-Control-Max-Age", "86400")
 
 			if r.Method == http.MethodOptions {

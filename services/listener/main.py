@@ -157,6 +157,17 @@ class TelegramListener:
         if not getattr(msg, "text", None) and not getattr(msg, "media", None):
             return
 
+        # Skip messages if channel is marked inactive
+        if not self.db.is_channel_active(db_channel_id):
+            msg_id = getattr(msg, "id", None)
+            log_json(
+                "DEBUG",
+                f"Skipping message {msg_id} from inactive channel {db_channel_id}",
+                correlation_id=correlation_id,
+                extra={"channel_id": db_channel_id},
+            )
+            return
+
         try:
             payload = normalize_telethon_message(
                 channel_db_id=db_channel_id,
