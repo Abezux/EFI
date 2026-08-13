@@ -9,6 +9,8 @@ import { SearchBar } from '@/components/SearchBar';
 import { LiveFeedUpdater } from '@/components/LiveFeedUpdater';
 import { ArrowLeft, Tag } from 'lucide-react';
 
+import { buildCategoryMetadata, DEFAULT_SITE_URL } from '@/lib/seo';
+
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
@@ -27,12 +29,10 @@ export async function generateMetadata({
     if (!currentCategory) {
       return { title: 'Category Not Found' };
     }
-    return {
-      title: `${currentCategory.name} News — Ethiopia Financial Platform`,
-      description: `Verified news updates and AI summaries in ${currentCategory.name}.`,
-    };
+    const canonicalUrl = `${DEFAULT_SITE_URL}/category/${currentCategory.slug}`;
+    return buildCategoryMetadata(currentCategory, canonicalUrl);
   } catch {
-    return { title: 'Category News' };
+    return { title: 'Category News — Ethiopia Financial Insights' };
   }
 }
 

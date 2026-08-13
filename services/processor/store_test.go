@@ -385,3 +385,110 @@ func TestStore_ClusteringWindowAnchoredToFirstSeenAt(t *testing.T) {
 	t.Log("SUCCESS: Old event correctly found within expanded 72h window!")
 }
 
+func TestStore_SlugImmutabilityAcrossReEnrichment(t *testing.T) {
+	dbURL := os.Getenv("APP_DATABASE_URL")
+	if dbURL == "" {
+		dbURL = "postgres://efi_app:efi_app_pass@localhost:5432/efi_dev?sslmode=disable"
+	}
+
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		t.Skipf("skipping integration test: cannot connect to db: %v", err)
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := db.PingContext(ctx); err != nil {
+		t.Skipf("skipping integration test: db not reachable: %v", err)
+	}
+
+	store := NewStore(db)
+
+	// Insert test channel
+	var channelID int64
+	err = db.QueryRowContext(ctx, `
+		INSERT INTO channels (telegram_channel_id, name, handle, is_active)
+		VALUES (888881, 'Slug Test Channel', 'slugtestch', true)
+		ON CONFLICT (telegram_channel_id) DO UPDATE SET is_active = true
+		RETURNING id
+	`).Scan(&channelID)
+	if err != nil {
+		t.Fatalf("insert channel failed: %v", err)
+	}
+
+	// Insert test raw post
+	var postID int64
+	err = db.QueryRowContext(ctx, `
+		INSERT INTO raw_posts (channel_id, telegram_message_id, raw_text, processing_status, posted_at)
+		VALUES ($1, 999991, 'Initial post content for slug immutability testing', 'ingested', NOW())
+		RETURNING id
+	`, channelID).Scan(&postID)
+	if err != nil {
+		t.Fatalf("insert raw post failed: %v", err)
+	}
+	defer func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM raw_posts WHERE id = $1", postID)
+	}()
+
+	// Create event
+	post := &RawPost{ID: postID, RawText: "Initial post content", PostedAt: time.Now()}
+	audit := AuditEntry{RawPostID: &postID, Stage: "clustering", Decision: "created_new_event", Confidence: 1.0}
+	eventID, err := store.CreateEventWithAudit(ctx, post, "CBE Initial Directive Report", audit)
+	if err != nil {
+		t.Fatalf("CreateEventWithAudit failed: %v", err)
+	}
+	defer func() {
+		_, _ = db.ExecContext(ctx, "DELETE FROM processing_audit WHERE news_event_id = $1", eventID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM event_sources WHERE event_id = $1", eventID)
+		_, _ = db.ExecContext(ctx, "DELETE FROM news_events WHERE id = $1", eventID)
+	}()
+
+	// First enrichment: produces first slug
+	firstHeadline := "CBE Launches New FX Auction Guidelines"
+	enrichAudit1 := AuditEntry{NewsEventID: &eventID, Stage: "enrichment", Decision: "summary_generated", Confidence: 1.0}
+	err = store.SaveEnrichmentWithAudit(ctx, eventID, nil, firstHeadline, "Initial AI summary report.", nil, enrichAudit1)
+	if err != nil {
+		t.Fatalf("first SaveEnrichmentWithAudit failed: %v", err)
+	}
+
+	var slugAfterFirstEnrichment, headlineAfterFirst string
+	err = db.QueryRowContext(ctx, "SELECT slug, ai_headline FROM news_events WHERE id = $1", eventID).Scan(&slugAfterFirstEnrichment, &headlineAfterFirst)
+	if err != nil {
+		t.Fatalf("query slug after first enrichment failed: %v", err)
+	}
+
+	expectedSlug := "cbe-launches-new-fx-auction-guidelines"
+	if slugAfterFirstEnrichment != expectedSlug {
+		t.Fatalf("expected slug %q after first enrichment, got %q", expectedSlug, slugAfterFirstEnrichment)
+	}
+	t.Logf("First enrichment generated expected slug: %s", slugAfterFirstEnrichment)
+
+	// Second enrichment (simulating re-enrichment when new sources attach): headline completely changes
+	secondHeadline := "Updated CBE Policy Adjusts Exchange Rates Significantly"
+	enrichAudit2 := AuditEntry{NewsEventID: &eventID, Stage: "enrichment", Decision: "summary_generated", Confidence: 1.0}
+	err = store.SaveEnrichmentWithAudit(ctx, eventID, nil, secondHeadline, "Updated AI summary report with more details.", nil, enrichAudit2)
+	if err != nil {
+		t.Fatalf("second SaveEnrichmentWithAudit failed: %v", err)
+	}
+
+	var slugAfterSecondEnrichment, headlineAfterSecond string
+	err = db.QueryRowContext(ctx, "SELECT slug, ai_headline FROM news_events WHERE id = $1", eventID).Scan(&slugAfterSecondEnrichment, &headlineAfterSecond)
+	if err != nil {
+		t.Fatalf("query slug after second enrichment failed: %v", err)
+	}
+
+	if headlineAfterSecond != secondHeadline {
+		t.Fatalf("expected headline to update to %q, got %q", secondHeadline, headlineAfterSecond)
+	}
+
+	// CRITICAL IMMUTABILITY CHECK (ADR-0013): Slug must remain exactly the first slug!
+	if slugAfterSecondEnrichment != expectedSlug {
+		t.Fatalf("SLUG MUTATION BUG: Slug changed from %q to %q after re-enrichment! Slugs must be strictly immutable.", expectedSlug, slugAfterSecondEnrichment)
+	}
+
+	t.Logf("SUCCESS: Slug %q was preserved across re-enrichment despite headline change to %q", slugAfterSecondEnrichment, headlineAfterSecond)
+}
+
+

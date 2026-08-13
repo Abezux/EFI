@@ -694,15 +694,22 @@ func (s *Store) SaveEnrichmentWithAudit(
 		headlineParam = sql.NullString{String: trimmed, Valid: true}
 	}
 
+	// Generate candidate slug from ai_headline (or fallback handled in GenerateSlug)
+	candidateSlug := GenerateSlug(aiHeadline)
+
+	// IMMUTABILITY GUARANTEE (ADR-0013 / Spec 1.3):
+	// COALESCE(slug, $4) ensures that if news_events.slug is already non-null,
+	// it will NEVER be overwritten or regenerated, even across re-enrichments.
 	updateEventQuery := `
 		UPDATE news_events
 		SET ai_headline = $1,
 		    ai_summary = $2,
 		    category_id = $3,
+		    slug = COALESCE(slug, $4),
 		    last_enriched_at = NOW()
-		WHERE id = $4
+		WHERE id = $5
 	`
-	if _, err := tx.ExecContext(ctx, updateEventQuery, headlineParam, aiSummary, categoryID, eventID); err != nil {
+	if _, err := tx.ExecContext(ctx, updateEventQuery, headlineParam, aiSummary, categoryID, candidateSlug, eventID); err != nil {
 		return fmt.Errorf("update news_events enrichment: %w", err)
 	}
 

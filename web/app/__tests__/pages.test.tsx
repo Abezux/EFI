@@ -2,15 +2,19 @@ import React from 'react';
 import { render, screen } from '@testing-library/react';
 import HomePage from '../page';
 import CategoryPage from '../category/[slug]/page';
-import EventDetailPage from '../events/[id]/page';
+import NewsDetailPage from '../news/[category]/[slug]/page';
+import LegacyEventPage from '../events/[id]/page';
 import SearchPage from '../search/page';
 import * as api from '@/lib/api';
+import * as navigation from 'next/navigation';
 
 const mockEventsResponse: api.EventsResponse = {
   events: [
     {
       id: 101,
       canonical_title: 'Commercial Bank of Ethiopia FX Directive',
+      ai_headline: 'Commercial Bank of Ethiopia FX Directive',
+      slug: 'commercial-bank-of-ethiopia-fx-directive',
       ai_summary: 'Central bank launched new FX policies across major retail banks.',
       ai_summary_generated: true,
       category: {
@@ -23,6 +27,7 @@ const mockEventsResponse: api.EventsResponse = {
         {
           channel_name: 'Tikvah Ethiopia',
           channel_handle: 'tikvahethiopia',
+          telegram_message_id: 1234,
           posted_at: '2026-08-11T12:00:00Z',
           excerpt: 'CBE implemented directive today...',
         },
@@ -99,16 +104,19 @@ describe('App Router Pages Integration', () => {
     });
   });
 
-  describe('EventDetailPage', () => {
+  describe('NewsDetailPage (Canonical URL)', () => {
     it('renders full event details, AI executive summary, and source list', async () => {
       jest
         .spyOn(api, 'getEventById')
         .mockResolvedValueOnce(mockEventsResponse.events[0]);
 
-      const PageComponent = await EventDetailPage({
-        params: { id: '101' },
+      const PageComponent = await NewsDetailPage({
+        params: {
+          category: 'banking-finance',
+          slug: 'commercial-bank-of-ethiopia-fx-directive-101',
+        },
       });
-      render(PageComponent);
+      const { container } = render(PageComponent);
 
       expect(
         screen.getByText('Commercial Bank of Ethiopia FX Directive')
@@ -120,10 +128,72 @@ describe('App Router Pages Integration', () => {
           'Central bank launched new FX policies across major retail banks.'
         )
       ).toBeInTheDocument();
-      expect(screen.getByText('Source Reports (1)')).toBeInTheDocument();
+      expect(
+        screen.getByText('Aggregated Source Reports (1)')
+      ).toBeInTheDocument();
       expect(
         screen.getByText(/CBE implemented directive today\.\.\./)
       ).toBeInTheDocument();
+
+      // Check schema.org JSON-LD script is present
+      const script = container.querySelector('script[type="application/ld+json"]');
+      expect(script).not.toBeNull();
+      const parsed = JSON.parse(script?.innerHTML || '{}');
+      expect(parsed['@type']).toBe('NewsArticle');
+      expect(parsed.headline).toBe('Commercial Bank of Ethiopia FX Directive');
+    });
+
+    it('redirects to canonical path if slug does not match exactly', async () => {
+      jest
+        .spyOn(api, 'getEventById')
+        .mockResolvedValueOnce(mockEventsResponse.events[0]);
+
+      const redirectSpy = jest
+        .spyOn(navigation, 'permanentRedirect')
+        .mockImplementation((url: string) => {
+          throw new Error(`REDIRECTED_TO:${url}`);
+        });
+
+      await expect(
+        NewsDetailPage({
+          params: {
+            category: 'wrong-category',
+            slug: 'old-slug-101',
+          },
+        })
+      ).rejects.toThrow(
+        'REDIRECTED_TO:/news/banking-finance/commercial-bank-of-ethiopia-fx-directive-101'
+      );
+
+      expect(redirectSpy).toHaveBeenCalledWith(
+        '/news/banking-finance/commercial-bank-of-ethiopia-fx-directive-101'
+      );
+    });
+  });
+
+  describe('LegacyEventPage (301 Permanent Redirect)', () => {
+    it('redirects /events/101 to /news/banking-finance/commercial-bank-of-ethiopia-fx-directive-101', async () => {
+      jest
+        .spyOn(api, 'getEventById')
+        .mockResolvedValueOnce(mockEventsResponse.events[0]);
+
+      const redirectSpy = jest
+        .spyOn(navigation, 'permanentRedirect')
+        .mockImplementation((url: string) => {
+          throw new Error(`REDIRECTED_TO:${url}`);
+        });
+
+      await expect(
+        LegacyEventPage({
+          params: { id: '101' },
+        })
+      ).rejects.toThrow(
+        'REDIRECTED_TO:/news/banking-finance/commercial-bank-of-ethiopia-fx-directive-101'
+      );
+
+      expect(redirectSpy).toHaveBeenCalledWith(
+        '/news/banking-finance/commercial-bank-of-ethiopia-fx-directive-101'
+      );
     });
   });
 

@@ -16,4 +16,7 @@ jest.mock('next/navigation', () => ({
   }),
   usePathname: () => '/',
   notFound: jest.fn(),
+  redirect: jest.fn(),
+  permanentRedirect: jest.fn(),
 }));
+

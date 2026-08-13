@@ -50,12 +50,15 @@ describe('EventCard Component', () => {
     ).toBeInTheDocument();
   });
 
-  it('links title to event detail page', () => {
+  it('links title to event detail page with canonical path', () => {
     render(<EventCard event={mockEvent} />);
     const link = screen.getByRole('link', {
       name: 'National Bank FX Directive 2026',
     });
-    expect(link).toHaveAttribute('href', '/events/42');
+    expect(link).toHaveAttribute(
+      'href',
+      '/news/banking-finance/national-bank-fx-directive-2026-42'
+    );
   });
 
   it('does not render AI badge if ai_summary_generated is false', () => {

@@ -50,6 +50,7 @@ type SourceDetail struct {
 type EventSummary struct {
 	ID                 int64         `json:"id"`
 	CanonicalTitle     string        `json:"canonical_title"`
+	Slug               string        `json:"slug"`
 	AIHeadline         *string       `json:"ai_headline,omitempty"`
 	AISummary          string        `json:"ai_summary"`
 	AISummaryGenerated bool          `json:"ai_summary_generated"`
@@ -64,6 +65,7 @@ type EventSummary struct {
 type EventDetail struct {
 	ID                 int64          `json:"id"`
 	CanonicalTitle     string         `json:"canonical_title"`
+	Slug               string         `json:"slug"`
 	AIHeadline         *string        `json:"ai_headline,omitempty"`
 	AISummary          string         `json:"ai_summary"`
 	AISummaryGenerated bool           `json:"ai_summary_generated"`
@@ -222,6 +224,7 @@ func (s *SQLStore) GetEvents(ctx context.Context, filter EventFilter) (*EventLis
 		SELECT 
 			ne.id,
 			ne.canonical_title,
+			coalesce(ne.slug, ''),
 			ne.ai_headline,
 			coalesce(ne.ai_summary, ''),
 			ne.source_count,
@@ -260,6 +263,7 @@ func (s *SQLStore) GetEvents(ctx context.Context, filter EventFilter) (*EventLis
 		if err := rows.Scan(
 			&ev.ID,
 			&ev.CanonicalTitle,
+			&ev.Slug,
 			&aiHeadline,
 			&aiSummaryStr,
 			&ev.SourceCount,
@@ -323,6 +327,7 @@ func (s *SQLStore) GetEventByID(ctx context.Context, id int64) (*EventDetail, er
 		SELECT 
 			ne.id,
 			ne.canonical_title,
+			coalesce(ne.slug, ''),
 			ne.ai_headline,
 			coalesce(ne.ai_summary, ''),
 			ne.source_count,
@@ -348,6 +353,7 @@ func (s *SQLStore) GetEventByID(ctx context.Context, id int64) (*EventDetail, er
 	err := s.db.QueryRowContext(ctx, query, id).Scan(
 		&ev.ID,
 		&ev.CanonicalTitle,
+		&ev.Slug,
 		&aiHeadline,
 		&aiSummaryStr,
 		&ev.SourceCount,
@@ -520,6 +526,7 @@ func (s *SQLStore) SearchEvents(ctx context.Context, query string, limit, offset
 		SELECT 
 			ne.id,
 			ne.canonical_title,
+			coalesce(ne.slug, ''),
 			ne.ai_headline,
 			coalesce(ne.ai_summary, ''),
 			ne.source_count,
@@ -566,6 +573,7 @@ func (s *SQLStore) SearchEvents(ctx context.Context, query string, limit, offset
 		if err := rows.Scan(
 			&ev.ID,
 			&ev.CanonicalTitle,
+			&ev.Slug,
 			&aiHeadline,
 			&aiSummaryStr,
 			&ev.SourceCount,

@@ -532,3 +532,52 @@ func TestGenerateEmbeddingWithRetry(t *testing.T) {
 		}
 	})
 }
+
+func TestGenerateSlug(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "Standard English headline",
+			input:    "Commercial Bank of Ethiopia FX Directive",
+			expected: "commercial-bank-of-ethiopia-fx-directive",
+		},
+		{
+			name:     "Punctuation and symbols",
+			input:    "New $250 Million Bond Fund Launched! (2026 Update)",
+			expected: "new-250-million-bond-fund-launched-2026-update",
+		},
+		{
+			name:     "Amharic text preservation",
+			input:    "የአፍሪካ ሀገራትን የብድር ጫና ለመቀነስ",
+			expected: "የአፍሪካ-ሀገራትን-የብድር-ጫና-ለመቀነስ",
+		},
+		{
+			name:     "Leading and trailing dashes and spaces",
+			input:    " --- Special Announcement: Ethiopia Market Trends --- ",
+			expected: "special-announcement-ethiopia-market-trends",
+		},
+		{
+			name:     "Empty string fallback",
+			input:    "   ",
+			expected: "event",
+		},
+		{
+			name:     "Only special characters fallback",
+			input:    "!@#$%^&*()_+",
+			expected: "event",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := GenerateSlug(tt.input)
+			if result != tt.expected {
+				t.Errorf("GenerateSlug(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+

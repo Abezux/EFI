@@ -185,4 +185,18 @@ If you encounter:
 - **Graceful Client Degradation**: The web client (`LiveFeedUpdater.tsx`) must gracefully handle SSE disconnects and errors, displaying visible reconnection status when disconnected while allowing the application to function seamlessly via standard SSR and page navigation.
 - **V8 Boundary**: V7 is strictly limited to real-time SSE streaming. Search engine optimization (SEO), OpenGraph metadata generation, RSS/Atom feeds, and sitemaps are deferred to V8.
 
+---
+
+## 17. V8 Addendum — Search Engine Optimization & Canonical URL Strategy
+
+- **Slug Immutability Invariant (ADR-0013)**: Event slugs are generated exactly once upon initial event enrichment and written to `news_events.slug`. No pipeline code path, background task, or re-enrichment routine may ever overwrite or regenerate an existing non-null slug. A slug must remain permanent throughout the lifecycle of an event to protect index integrity and external backlinks.
+- **Server-Side Rendering (SSR) Metadata Invariant**: All SEO metadata—including title tags, descriptions, Open Graph (`og:*`), Twitter Cards (`twitter:*`), canonical links (`rel="canonical"`), and schema.org `NewsArticle` JSON-LD—must be rendered server-side in the initial HTML payload. Client-only metadata injection via `useEffect` is strictly prohibited.
+- **Canonical Routing & 301 Redirects**:
+  - The authoritative URL pattern for news events is `/news/{category}/{slug}-{id}`.
+  - Legacy routes (`/events/{id}`) and mismatched category/slug requests must return HTTP 301 permanent redirects (`permanentRedirect`) to the canonical URL.
+- **Truthful Structured Data**: `NewsArticle` JSON-LD schema must reflect real, verified data from the database and API. Fabricating missing metadata (such as invented author persons or nonexistent article image URLs) is strictly prohibited.
+- **Sitemap & Robots Guardrails**: `sitemap.xml` dynamically lists only published events (`status = 'active'`) and category routes. Ambiguous posts in `needs_review` must never be leaked or included in public sitemaps.
+- **V9 Boundary**: V8 is strictly limited to SEO, canonical URLs, structured data, and sitemaps. Administrative moderation interfaces, analytics dashboards, and multi-tenant authentication are deferred to V9+.
+
+
 

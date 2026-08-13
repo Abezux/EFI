@@ -4,10 +4,31 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Newspaper, Sparkles } from 'lucide-react';
 
+import { DEFAULT_SITE_URL, SITE_NAME, DEFAULT_DESCRIPTION } from '@/lib/seo';
+
 export const metadata: Metadata = {
-  title: 'Ethiopia Financial News Platform',
-  description:
-    'Real-time automated aggregation, verification, and AI-summarization of Ethiopian financial and economic news.',
+  metadataBase: new URL(DEFAULT_SITE_URL),
+  title: {
+    default: `${SITE_NAME} — Verified Real-Time Economic Intelligence`,
+    template: `%s | ${SITE_NAME}`,
+  },
+  description: DEFAULT_DESCRIPTION,
+  openGraph: {
+    type: 'website',
+    siteName: SITE_NAME,
+    title: `${SITE_NAME} — Verified Real-Time Economic Intelligence`,
+    description: DEFAULT_DESCRIPTION,
+    url: DEFAULT_SITE_URL,
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: `${SITE_NAME} — Verified Real-Time Economic Intelligence`,
+    description: DEFAULT_DESCRIPTION,
+  },
+  robots: {
+    index: true,
+    follow: true,
+  },
 };
 
 export default function RootLayout({

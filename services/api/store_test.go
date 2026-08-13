@@ -107,6 +107,9 @@ func TestSQLStoreLiveRead(t *testing.T) {
 			if !ev.AISummaryGenerated {
 				t.Errorf("expected AISummaryGenerated = true for event %d", ev.ID)
 			}
+			if ev.Slug == "" {
+				t.Errorf("expected Slug to be populated for event %d, got empty string", ev.ID)
+			}
 		}
 
 		// 3. Test GetEventByID
@@ -117,6 +120,9 @@ func TestSQLStoreLiveRead(t *testing.T) {
 		}
 		if detail.ID != firstID {
 			t.Errorf("expected detail.ID = %d, got %d", firstID, detail.ID)
+		}
+		if detail.Slug == "" {
+			t.Errorf("expected detail.Slug to be populated, got empty string")
 		}
 		if !detail.AISummaryGenerated {
 			t.Errorf("expected detail.AISummaryGenerated = true")

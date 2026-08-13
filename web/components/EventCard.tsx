@@ -1,6 +1,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { NewsEvent } from '@/lib/api';
+import { getCanonicalEventPath } from '@/lib/seo';
 import { AiBadge } from './AiBadge';
 import { Clock, Layers } from 'lucide-react';
 
@@ -37,6 +38,7 @@ export function formatTimeAgo(dateString: string): string {
 export function EventCard({ event }: EventCardProps) {
   const timeAgo = formatTimeAgo(event.last_updated_at || event.first_seen_at);
   const headline = (event.ai_headline && event.ai_headline.trim()) || event.canonical_title;
+  const canonicalPath = getCanonicalEventPath(event);
 
   return (
     <article className="event-card" data-testid={`event-card-${event.id}`}>
@@ -66,7 +68,7 @@ export function EventCard({ event }: EventCardProps) {
       </div>
 
       <h2 className="event-card-title">
-        <Link href={`/events/${event.id}`} className="event-card-title-link">
+        <Link href={canonicalPath} className="event-card-title-link">
           {headline}
         </Link>
       </h2>
@@ -91,7 +93,7 @@ export function EventCard({ event }: EventCardProps) {
         </div>
 
         <Link
-          href={`/events/${event.id}`}
+          href={canonicalPath}
           style={{
             fontSize: '0.875rem',
             fontWeight: 600,
