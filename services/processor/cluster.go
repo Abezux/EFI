@@ -37,6 +37,8 @@ type EventCandidate struct {
 	CanonicalTitle    string
 	FirstSeenAt       time.Time
 	LastUpdatedAt     time.Time
+	FoundingRawPostID int64
+	FoundingEmbedding []float32
 	EmbeddingCentroid []float32
 	Sources           []EventSourceMember
 }
@@ -60,10 +62,13 @@ func GenerateCanonicalTitle(text string) string {
 //     attaches immediately with similarity score 0 and match_reason="exact_text".
 //  2. Near Duplicate (Simhash): If minimum Hamming distance is <= simhashThreshold (e.g. 10),
 //     attaches immediately to the best-matching event with match_reason="simhash".
-//  3. Semantic Similarity (Embedding): If post embedding is available and candidate has an embedding centroid:
-//     - If CosineSimilarity >= highThreshold (e.g. 0.82): attaches to the best event with match_reason="embedding".
-//     - If lowThreshold <= CosineSimilarity < highThreshold (e.g. 0.65 - 0.82): routes to "needs_review" (ambiguous band).
-//     - If CosineSimilarity < lowThreshold: creates a new news_event.
+//  3. Semantic Similarity (Anti-Drift Embedding Check): If post embedding is available and candidate has an embedding centroid:
+//     - Compares post embedding against BOTH candidate's centroid AND candidate's founding post embedding.
+//     - If CosineSimilarity >= highThreshold against BOTH centroid and founding post:
+//       attaches with match_reason="embedding".
+//     - If CosineSimilarity >= lowThreshold against BOTH centroid and founding post (ambiguous band):
+//       routes to "needs_review" with match_reason="embedding_ambiguous".
+//     - If similarity against either falls below lowThreshold: does not attach (creates a new news_event).
 //  4. Otherwise: Creates a new news_events row with canonical_title set to truncated normalized text.
 func DecideClustering(
 	postID int64,
@@ -115,41 +120,51 @@ func DecideClustering(
 		}
 	}
 
-	// 3. Semantic Embedding Cosine Similarity Check (Fallback Path)
+	// 3. Semantic Embedding Cosine Similarity Check with Anti-Drift Dual Verification (Fallback Path)
 	if len(embedding) > 0 && len(candidates) > 0 {
 		var bestSemanticCandidate *EventCandidate
-		bestCosine := -1.0
+		bestEffectiveScore := -1.0
+		var bestCentroidScore float64
+		var bestFoundingScore float64
 
 		for _, candidate := range candidates {
 			if len(candidate.EmbeddingCentroid) == 0 {
 				continue
 			}
-			cosSim := CosineSimilarity(embedding, candidate.EmbeddingCentroid)
-			if cosSim > bestCosine {
-				bestCosine = cosSim
+			cosCentroid := CosineSimilarity(embedding, candidate.EmbeddingCentroid)
+			cosFounding := cosCentroid
+			if len(candidate.FoundingEmbedding) > 0 {
+				cosFounding = CosineSimilarity(embedding, candidate.FoundingEmbedding)
+			}
+
+			effectiveScore := math.Min(cosCentroid, cosFounding)
+			if effectiveScore > bestEffectiveScore {
+				bestEffectiveScore = effectiveScore
+				bestCentroidScore = cosCentroid
+				bestFoundingScore = cosFounding
 				bestSemanticCandidate = candidate
 			}
 		}
 
 		if bestSemanticCandidate != nil {
-			// Confidently same event
-			if bestCosine >= embeddingHighThreshold {
+			// Confidently same event: must meet high threshold against both centroid and founding post
+			if bestCentroidScore >= embeddingHighThreshold && bestFoundingScore >= embeddingHighThreshold {
 				return &ClusteringDecision{
 					Type:            DecisionAttach,
 					TargetEventID:   bestSemanticCandidate.EventID,
-					SimilarityScore: int(math.Round(bestCosine * 100)),
-					CosineScore:     bestCosine,
+					SimilarityScore: int(math.Round(bestEffectiveScore * 100)),
+					CosineScore:     bestEffectiveScore,
 					MatchReason:     "embedding",
 				}
 			}
 
-			// Ambiguous band: lowThreshold <= bestCosine < highThreshold -> needs_review
-			if bestCosine >= embeddingLowThreshold {
+			// Ambiguous band: both scores at least low threshold -> needs_review
+			if bestCentroidScore >= embeddingLowThreshold && bestFoundingScore >= embeddingLowThreshold {
 				return &ClusteringDecision{
 					Type:            DecisionNeedsReview,
 					TargetEventID:   bestSemanticCandidate.EventID,
-					SimilarityScore: int(math.Round(bestCosine * 100)),
-					CosineScore:     bestCosine,
+					SimilarityScore: int(math.Round(bestEffectiveScore * 100)),
+					CosineScore:     bestEffectiveScore,
 					MatchReason:     "embedding_ambiguous",
 				}
 			}

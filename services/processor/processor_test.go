@@ -357,6 +357,134 @@ func TestClusteringDecision_AmbiguousBandNeedsReview(t *testing.T) {
 	}
 }
 
+// TestClusteringDecision_CentroidDriftAntiDriftProtection tests Section 5's drift simulation:
+// A series of marginal attachments causes the event's centroid to drift far from the founding post.
+// Under old single-centroid logic, a new post matching the drifted centroid (cos >= 0.82) would attach.
+// Under new V3.1 anti-drift logic, because similarity to the founding post is < 0.65, the post is
+// REJECTED from attaching and creates a new event.
+func TestClusteringDecision_CentroidDriftAntiDriftProtection(t *testing.T) {
+	threshold := 10
+	highThreshold := 0.82
+	lowThreshold := 0.65
+
+	// 1. Founding post embedding: [1.0, 0, 0, ...]
+	foundingVec := make([]float32, 768)
+	foundingVec[0] = 1.0
+
+	// 2. Drifted Centroid: drifted over multiple attachments to [0.30, 0.954, 0, ...]
+	driftedCentroid := make([]float32, 768)
+	driftedCentroid[0] = 0.30
+	driftedCentroid[1] = 0.954
+
+	event := &EventCandidate{
+		EventID:           801,
+		CanonicalTitle:    "Verified Event #1 - Original Report",
+		FoundingRawPostID: 1,
+		FoundingEmbedding: foundingVec,
+		EmbeddingCentroid: driftedCentroid,
+		Sources: []EventSourceMember{
+			{RawPostID: 1, NormalizedText: "original founding report", Simhash: 111111},
+			{RawPostID: 2, NormalizedText: "intermediate drifted update", Simhash: 222222},
+		},
+	}
+	candidates := []*EventCandidate{event}
+
+	// 3. Incoming post matching the drifted centroid closely, but completely unrelated to founding post:
+	// Vector: [0.10, 0.995, 0, ...]
+	incomingText := "Unrelated topic that matches drifted centroid"
+	normIncoming := NormalizeText(incomingText)
+	hashIncoming := ComputeSimhash(normIncoming)
+	incomingVec := make([]float32, 768)
+	incomingVec[0] = 0.10
+	incomingVec[1] = 0.995
+
+	simToCentroid := CosineSimilarity(incomingVec, driftedCentroid)
+	simToFounding := CosineSimilarity(incomingVec, foundingVec)
+
+	t.Logf("Cosine similarity to Drifted Centroid: %f (>= %f high threshold)", simToCentroid, highThreshold)
+	t.Logf("Cosine similarity to Founding Post:     %f (< %f low threshold)", simToFounding, lowThreshold)
+
+	if simToCentroid < highThreshold {
+		t.Fatalf("setup error: simToCentroid %f must be >= %f", simToCentroid, highThreshold)
+	}
+	if simToFounding >= lowThreshold {
+		t.Fatalf("setup error: simToFounding %f must be < %f", simToFounding, lowThreshold)
+	}
+
+	// Evaluate clustering under V3.1 dual-check logic
+	dec := DecideClustering(99, normIncoming, hashIncoming, incomingVec, candidates, threshold, highThreshold, lowThreshold)
+
+	// PROOF: Post MUST NOT attach to Event 801, and MUST create a new event
+	if dec.Type != DecisionCreateNew {
+		t.Fatalf("ANTI-DRIFT FAILED: Expected DecisionCreateNew for drifted post, got %v (reason: %s, target: %d)",
+			dec.Type, dec.MatchReason, dec.TargetEventID)
+	}
+	if dec.MatchReason != "new_event" {
+		t.Fatalf("expected match_reason 'new_event', got %s", dec.MatchReason)
+	}
+	t.Log("SUCCESS: Anti-drift safeguard correctly rejected drifted attachment and created new event!")
+}
+
+// TestClusteringDecision_AmbiguousFoundingPostDriftProtection verifies that if a post matches the centroid
+// with high confidence but matches the founding post only moderately (ambiguous band), it is routed to
+// needs_review for verification rather than blindly auto-attached.
+func TestClusteringDecision_AmbiguousFoundingPostDriftProtection(t *testing.T) {
+	threshold := 10
+	highThreshold := 0.82
+	lowThreshold := 0.65
+
+	// Founding post: [1.0, 0, 0, ...]
+	foundingVec := make([]float32, 768)
+	foundingVec[0] = 1.0
+
+	// Slightly drifted centroid: [0.85, 0.527, 0, ...]
+	centroidVec := make([]float32, 768)
+	centroidVec[0] = 0.85
+	centroidVec[1] = 0.527
+
+	event := &EventCandidate{
+		EventID:           802,
+		CanonicalTitle:    "Original Event Title",
+		FoundingRawPostID: 10,
+		FoundingEmbedding: foundingVec,
+		EmbeddingCentroid: centroidVec,
+		Sources: []EventSourceMember{
+			{RawPostID: 10, NormalizedText: "founding report text", Simhash: 333333},
+		},
+	}
+	candidates := []*EventCandidate{event}
+
+	// Incoming post with:
+	// simToCentroid = 0.90 (>= 0.82)
+	// simToFounding = 0.72 (0.65 <= sim < 0.82, ambiguous)
+	// Vector: [0.72, 0.694, 0, ...]
+	// Dot with founding [1.0, 0]: 0.72
+	// Dot with centroid [0.85, 0.527]: 0.72*0.85 + 0.694*0.527 = 0.612 + 0.3657 = 0.9777
+	normIncoming := "Borderline related post needing review"
+	hashIncoming := ComputeSimhash(normIncoming)
+	incomingVec := make([]float32, 768)
+	incomingVec[0] = 0.72
+	incomingVec[1] = 0.694
+
+	simToCentroid := CosineSimilarity(incomingVec, centroidVec)
+	simToFounding := CosineSimilarity(incomingVec, foundingVec)
+
+	t.Logf("Cosine similarity to Centroid: %f (>= %f)", simToCentroid, highThreshold)
+	t.Logf("Cosine similarity to Founding: %f (between %f and %f)", simToFounding, lowThreshold, highThreshold)
+
+	dec := DecideClustering(100, normIncoming, hashIncoming, incomingVec, candidates, threshold, highThreshold, lowThreshold)
+
+	if dec.Type != DecisionNeedsReview {
+		t.Fatalf("Expected DecisionNeedsReview for ambiguous founding similarity, got %v (reason: %s)", dec.Type, dec.MatchReason)
+	}
+	if dec.TargetEventID != 802 {
+		t.Fatalf("expected target event 802, got %d", dec.TargetEventID)
+	}
+	if dec.MatchReason != "embedding_ambiguous" {
+		t.Fatalf("expected match_reason 'embedding_ambiguous', got %s", dec.MatchReason)
+	}
+}
+
 type MockFailingEmbedder struct {
 	failCount int
 	calls     int

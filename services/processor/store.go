@@ -61,15 +61,19 @@ func (s *Store) FetchUnprocessedPosts(ctx context.Context, limit int) ([]*RawPos
 	return posts, nil
 }
 
-// FetchRecentEventCandidates retrieves active news_events and their source posts within the time window,
-// including their embedding centroids.
+// FetchRecentEventCandidates retrieves active news_events and their source posts within the time window anchored to first_seen_at,
+// including their embedding centroids and founding post embeddings.
 func (s *Store) FetchRecentEventCandidates(ctx context.Context, window time.Duration) ([]*EventCandidate, error) {
 	windowInterval := fmt.Sprintf("%d seconds", int(window.Seconds()))
 	eventQuery := `
-		SELECT id, canonical_title, first_seen_at, last_updated_at, COALESCE(embedding_centroid::text, '')
-		FROM news_events
-		WHERE status = 'active' AND last_updated_at >= NOW() - $1::interval
-		ORDER BY last_updated_at DESC
+		SELECT ne.id, ne.canonical_title, ne.first_seen_at, ne.last_updated_at,
+		       COALESCE(ne.founding_raw_post_id, 0),
+		       COALESCE(ne.embedding_centroid::text, ''),
+		       COALESCE(rp_founding.embedding::text, '')
+		FROM news_events ne
+		LEFT JOIN raw_posts rp_founding ON ne.founding_raw_post_id = rp_founding.id
+		WHERE ne.status = 'active' AND ne.first_seen_at >= NOW() - $1::interval
+		ORDER BY ne.first_seen_at DESC
 	`
 	rows, err := s.db.QueryContext(ctx, eventQuery, windowInterval)
 	if err != nil {
@@ -83,14 +87,20 @@ func (s *Store) FetchRecentEventCandidates(ctx context.Context, window time.Dura
 
 	for rows.Next() {
 		c := &EventCandidate{Sources: []EventSourceMember{}}
-		var centroidStr string
-		if err := rows.Scan(&c.EventID, &c.CanonicalTitle, &c.FirstSeenAt, &c.LastUpdatedAt, &centroidStr); err != nil {
+		var centroidStr, foundingStr string
+		if err := rows.Scan(&c.EventID, &c.CanonicalTitle, &c.FirstSeenAt, &c.LastUpdatedAt, &c.FoundingRawPostID, &centroidStr, &foundingStr); err != nil {
 			return nil, fmt.Errorf("scan recent event: %w", err)
 		}
 		if centroidStr != "" {
 			vec, err := ParsePgVector(centroidStr)
 			if err == nil {
 				c.EmbeddingCentroid = vec
+			}
+		}
+		if foundingStr != "" {
+			vec, err := ParsePgVector(foundingStr)
+			if err == nil {
+				c.FoundingEmbedding = vec
 			}
 		}
 		candidates = append(candidates, c)
@@ -159,11 +169,11 @@ func (s *Store) CreateEvent(
 	}
 
 	eventQuery := `
-		INSERT INTO news_events (canonical_title, status, first_seen_at, last_updated_at, source_count, embedding_centroid)
-		VALUES ($1, 'active', $2, $2, 1, $3::vector)
+		INSERT INTO news_events (canonical_title, status, first_seen_at, last_updated_at, source_count, embedding_centroid, founding_raw_post_id)
+		VALUES ($1, 'active', $2, $2, 1, $3::vector, $4)
 		RETURNING id
 	`
-	if err := tx.QueryRowContext(ctx, eventQuery, canonicalTitle, post.PostedAt, vecParam).Scan(&eventID); err != nil {
+	if err := tx.QueryRowContext(ctx, eventQuery, canonicalTitle, post.PostedAt, vecParam, post.ID).Scan(&eventID); err != nil {
 		return 0, fmt.Errorf("insert news_events: %w", err)
 	}
 
@@ -349,22 +359,25 @@ func (s *Store) FindNearestCandidateEvent(ctx context.Context, postID int64, win
 	windowInterval := fmt.Sprintf("%d seconds", int(window.Seconds()))
 	query := `
 		SELECT ne.id, ne.canonical_title, ne.first_seen_at, ne.last_updated_at,
+		       COALESCE(ne.founding_raw_post_id, 0),
 		       COALESCE(ne.embedding_centroid::text, ''),
+		       COALESCE(rp_founding.embedding::text, ''),
 		       1 - (ne.embedding_centroid <=> rp.embedding) AS cosine_sim
-		FROM news_events ne, raw_posts rp
-		WHERE rp.id = $1
-		  AND rp.embedding IS NOT NULL
+		FROM news_events ne
+		JOIN raw_posts rp ON rp.id = $1
+		LEFT JOIN raw_posts rp_founding ON ne.founding_raw_post_id = rp_founding.id
+		WHERE rp.embedding IS NOT NULL
 		  AND ne.embedding_centroid IS NOT NULL
 		  AND ne.status = 'active'
-		  AND ne.last_updated_at >= NOW() - $2::interval
+		  AND ne.first_seen_at >= NOW() - $2::interval
 		ORDER BY ne.embedding_centroid <=> rp.embedding ASC
 		LIMIT 1
 	`
 	row := s.db.QueryRowContext(ctx, query, postID, windowInterval)
 	c := &EventCandidate{Sources: []EventSourceMember{}}
-	var centroidStr string
+	var centroidStr, foundingStr string
 	var similarity float32
-	err := row.Scan(&c.EventID, &c.CanonicalTitle, &c.FirstSeenAt, &c.LastUpdatedAt, &centroidStr, &similarity)
+	err := row.Scan(&c.EventID, &c.CanonicalTitle, &c.FirstSeenAt, &c.LastUpdatedAt, &c.FoundingRawPostID, &centroidStr, &foundingStr, &similarity)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, 0, nil
@@ -376,6 +389,12 @@ func (s *Store) FindNearestCandidateEvent(ctx context.Context, postID int64, win
 		vec, err := ParsePgVector(centroidStr)
 		if err == nil {
 			c.EmbeddingCentroid = vec
+		}
+	}
+	if foundingStr != "" {
+		vec, err := ParsePgVector(foundingStr)
+		if err == nil {
+			c.FoundingEmbedding = vec
 		}
 	}
 
@@ -487,8 +506,8 @@ func (s *Store) CreateEventWithAudit(
 
 	var eventID int64
 	eventQuery := `
-		INSERT INTO news_events (canonical_title, status, first_seen_at, last_updated_at, source_count, embedding_centroid)
-		VALUES ($1, 'active', $2, $2, 1, (SELECT embedding FROM raw_posts WHERE id = $3))
+		INSERT INTO news_events (canonical_title, status, first_seen_at, last_updated_at, source_count, embedding_centroid, founding_raw_post_id)
+		VALUES ($1, 'active', $2, $2, 1, (SELECT embedding FROM raw_posts WHERE id = $3), $3)
 		RETURNING id
 	`
 	if err := tx.QueryRowContext(ctx, eventQuery, canonicalTitle, post.PostedAt, post.ID).Scan(&eventID); err != nil {
