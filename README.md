@@ -1,142 +1,90 @@
-# Ethiopia News Aggregation Platform
+# Ethiopia News Aggregator (EFI)
 
-A real-time news aggregation and clustering platform designed to ingest public Telegram channels across Ethiopia, normalize and deduplicate breaking stories, cluster related reports using semantic embeddings (`pgvector`), enrich events with AI summaries and entity metadata, and deliver low-latency updates via Server-Sent Events (SSE).
+Real-time, multi-source Ethiopian news aggregation, semantic clustering, AI summarization, and live delivery platform.
 
-> **Current Phase: V1 (Telegram Ingestion)**  
-> V1 implements the Python/Telethon listener service (`services/listener/`) that ingests messages from configured public Ethiopian Telegram channels into the PostgreSQL `raw_posts` table idempotently, surviving reconnections. No downstream deduplication, embeddings, AI clustering, public APIs, or frontends are active in V1.
-
----
-
-## Documentation & Architecture
-
-- **System Architecture**: [`docs/architecture/platform-architecture.md`](docs/architecture/platform-architecture.md)
-- **V0 Foundation Specification**: [`v0-foundation-spec.md`](v0-foundation-spec.md)
-- **V1 Ingestion Specification**: [`v1-ingestion-spec.md`](v1-ingestion-spec.md)
-- **Agent Guidelines & Rules**: [`AGENTS.md`](AGENTS.md)
-- **Architectural Decision Records (ADRs)**:
-  - [ADR-0001: Postgres-Only Queue at V1](docs/adr/0001-postgres-only-queue-at-v1.md)
-  - [ADR-0002: Server-Sent Events (SSE) over WebSockets](docs/adr/0002-sse-over-websockets.md)
-  - [ADR-0003: pgvector over Dedicated Vector Database](docs/adr/0003-pgvector-over-dedicated-vector-db.md)
-  - [ADR-0004: Language Split — Python Listener and Go Processor](docs/adr/0004-language-split-python-listener-go-processor.md)
-  - [ADR-0005: Telegram Session Storage via Environment Variable at V1](docs/adr/0005-telegram-session-storage.md)
-- **Operational Runbooks**:
-  - [Telegram Listener Disconnected](docs/runbooks/telegram-listener-disconnected.md)
+[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat&logo=go)](https://golang.org)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python)](https://www.python.org)
+[![Next.js](https://img.shields.io/badge/Next.js-14-black?style=flat&logo=next.js)](https://nextjs.org)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%20%2B%20pgvector-336791?style=flat&logo=postgresql)](https://github.com/pgvector/pgvector)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ---
 
-## Repository Structure
+## About
+
+Ethiopia News Aggregator (EFI) aggregates breaking news reports from public Telegram channels across Ethiopia into unified, cohesive stories. It ingests raw posts in real time, normalizes and deduplicates text using 64-bit Simhash, clusters related multilingual coverage via Google Gemini vector embeddings (`pgvector`), synthesizes neutral multi-source summaries with verbatim quotes using Gemini LLM, and streams live updates to a Next.js web application over Server-Sent Events (SSE).
+
+---
+
+## Project Structure
 
 ```
-/
-├── AGENTS.md                          # Mandatory agent and contributor instructions (with V1 addendum)
-├── README.md                          # Getting started and repository overview
-├── Makefile                           # Local development helper targets
-├── pyproject.toml                     # Python test, lint, and formatting configurations
-├── go.mod                             # Go module configuration
-├── .golangci.yml                      # Go linting ruleset
-├── .editorconfig                      # Universal code style configuration
-├── .env.example                       # Local environment variable template
-├── .gitignore                         # Git exclusion rules
-├── .github/
-│   └── workflows/
-│       └── ci.yml                     # GitHub Actions CI workflow (lint + migrate + test)
-├── db/
-│   └── migrations/
-│       ├── 0001_init.sql              # V1 schema (channels, raw_posts, efi_app role)
-│       └── 0002_seed_channels.sql     # Seed public Ethiopian news channels
-├── docs/
-│   ├── architecture/
-│   │   └── platform-architecture.md   # Core system design
-│   ├── adr/                           # Architectural Decision Records (0001-0005)
-│   └── runbooks/
-│       └── telegram-listener-disconnected.md
-├── infra/
-│   └── docker-compose.yml             # Local PostgreSQL and listener services
+.
+├── db/                         # PostgreSQL migration scripts (0001–0010) & migration runner
+├── docs/                       # Architectural Decision Records (ADRs) & system documentation
+├── infra/                      # Docker Compose multi-service definitions
 ├── services/
-│   └── listener/                      # Telegram Ingestion Service (Python / Telethon)
-│       ├── Dockerfile                 # Container definition (Python 3.11-slim, non-root)
-│       ├── requirements.txt           # Pinned dependencies (telethon, psycopg, pytest, ruff, black)
-│       ├── config.py                  # Environment variable configuration and validation
-│       ├── db.py                      # Parameterized PostgreSQL access layer
-│       ├── ingest.py                  # Raw message normalization logic
-│       ├── main.py                    # Telethon listener entrypoint & structured JSON logger
-│       └── tests/                     # Unit and fixture tests
-└── tests/
-    ├── fixtures/
-    │   └── sample_telegram_posts.json # Sample Telegram posts fixture data
-    ├── fixtures_test.go               # Go fixture validation test
-    └── validate_fixtures.py           # Python fixture validation script
+│   ├── listener/               # Telegram MTProto ingestion service (Python / Telethon)
+│   ├── processor/              # Simhash deduplication, embedding clustering & LLM enrichment (Go)
+│   └── api/                    # REST API, SSE streaming hub & admin moderation service (Go)
+├── tests/                      # Shared test fixtures and validation scripts
+└── web/                        # Public & admin web application (Next.js App Router / TypeScript)
 ```
 
 ---
 
 ## Getting Started
 
-Follow these steps on a clean clone to set up the local development environment and run tests:
+### Prerequisites
 
-### 1. Environment Setup
-Copy the environment template to create your local `.env` file:
+- [Docker](https://docs.docker.com/get-docker/) & Docker Compose
+- [Go](https://go.dev/) (1.22+) *(optional for local development)*
+- [Python](https://www.python.org/) (3.11+) *(optional for local development)*
+- [Node.js](https://nodejs.org/) (20+) *(optional for local development)*
+
+### 1. Configure Environment Variables
+
+Copy the example configuration file and fill in required values:
+
 ```bash
 cp .env.example .env
 ```
 
-To run the live listener against Telegram MTProto, populate `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, and `TELEGRAM_SESSION_STRING` in your `.env` (obtain credentials from [https://my.telegram.org](https://my.telegram.org)).
+Key environment variables:
 
-### 2. Start PostgreSQL (with `pgvector`)
-Spin up the local PostgreSQL container using Docker Compose:
+| Variable | Description |
+| --- | --- |
+| `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | PostgreSQL connection settings |
+| `APP_DB_USER`, `APP_DB_PASSWORD` | Database credentials for application services |
+| `API_DB_USER`, `API_DB_PASSWORD` | Read-only database credentials for public API |
+| `ADMIN_DB_USER`, `ADMIN_DB_PASSWORD` | Administrative database credentials |
+| `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_SESSION_STRING` | Telegram MTProto API client credentials |
+| `GEMINI_API_KEY` | Google Gemini API key for embeddings and LLM summaries |
+| `ADMIN_INITIAL_USERNAME`, `ADMIN_INITIAL_PASSWORD` | Initial admin account seed credentials |
+| `SESSION_SECRET` | Secret key used for signing administrative session cookies |
+| `INTERNAL_API_URL`, `NEXT_PUBLIC_API_URL` | API backend endpoints for SSR and client polling |
+
+### 2. Run with Docker Compose
+
+Start the full stack (database, listener, processor, API, web frontend):
+
 ```bash
-docker compose -f infra/docker-compose.yml up -d postgres
-```
-*(Alternatively: `make up`)*
-
-### 3. Apply Database Migrations
-Apply the schema and channel seed migrations:
-```bash
-PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d efi_dev -v ON_ERROR_STOP=1 -f db/migrations/0001_init.sql
-PGPASSWORD=postgres psql -h localhost -p 5432 -U postgres -d efi_dev -v ON_ERROR_STOP=1 -f db/migrations/0002_seed_channels.sql
-```
-*(Alternatively: `make migrate`)*
-
-This creates:
-- `vector` extension
-- `channels` table (seeded with initial public channels)
-- `raw_posts` table (with `UNIQUE(channel_id, telegram_message_id)` idempotency constraint)
-- `efi_app` least-privilege application role with appropriate grants
-
-### 4. Run Automated Tests & Linters
-Run the complete automated test suite (no real Telegram credentials required):
-
-**Using Makefile:**
-```bash
-make validate
+docker compose -f infra/docker-compose.yml up --build -d
 ```
 
-**Using Python Virtual Environment directly:**
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r services/listener/requirements.txt
-pytest services/listener/tests/
-ruff check services/listener/
-black --check services/listener/
-```
+Services will be accessible at:
+- **Web Frontend & Admin**: `http://localhost:3000`
+- **REST & SSE API**: `http://localhost:8080`
+- **PostgreSQL**: `localhost:5432`
 
-### 5. Running the Listener Service (Live Credentials Required)
-Once valid Telegram credentials are configured in `.env`, run the listener:
+### 3. Run Tests Locally
 
-**Via Docker Compose:**
-```bash
-docker compose -f infra/docker-compose.yml up --build listener
-```
+- **Python Listener**: `pytest services/listener/`
+- **Go Processor & API**: `go test ./...` (inside `services/processor` and `services/api`)
+- **Web Frontend**: `npm --prefix web test`
 
-**Via Local Python Process:**
-```bash
-python -m services.listener.main
-```
+---
 
-### 6. Stop Services
-When finished, stop all running containers:
-```bash
-docker compose -f infra/docker-compose.yml down
-```
-*(Alternatively: `make down`)*
+## License
+
+This project is licensed under the [MIT License](LICENSE).
