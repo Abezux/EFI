@@ -36,6 +36,8 @@ class Config:
     telegram_channels: list[str | int] = field(default_factory=list)
     reconnect_delay_seconds: int = 5
     max_reconnect_retries: int = 10
+    backfill_max_messages: int = 100
+    backfill_max_hours: int = 48
     log_level: str = "INFO"
 
     @classmethod
@@ -108,6 +110,8 @@ class Config:
 
         reconnect_delay = int(environ.get("RECONNECT_DELAY_SECONDS", "5"))
         max_retries = int(environ.get("MAX_RECONNECT_RETRIES", "10"))
+        backfill_max_msgs = int(environ.get("BACKFILL_MAX_MESSAGES", "100"))
+        backfill_max_hrs = int(environ.get("BACKFILL_MAX_HOURS", "48"))
         log_level = environ.get("LOG_LEVEL", "INFO").upper()
 
         return cls(
@@ -118,5 +122,7 @@ class Config:
             telegram_channels=channels,
             reconnect_delay_seconds=reconnect_delay,
             max_reconnect_retries=max_retries,
+            backfill_max_messages=backfill_max_msgs,
+            backfill_max_hours=backfill_max_hrs,
             log_level=log_level,
         )

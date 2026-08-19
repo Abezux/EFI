@@ -124,6 +124,24 @@ class Database:
                     },
                 )
                 row = cur.fetchone()
+
+                update_query = """
+                UPDATE channels
+                SET last_synced_message_id = GREATEST(
+                    COALESCE(last_synced_message_id, 0),
+                    %(telegram_message_id)s
+                ),
+                last_seen_at = NOW()
+                WHERE id = %(channel_id)s;
+                """
+                cur.execute(
+                    update_query,
+                    {
+                        "channel_id": channel_id,
+                        "telegram_message_id": telegram_message_id,
+                    },
+                )
+
                 if row is None:
                     # Message was already ingested previously (idempotent no-op)
                     return None
@@ -139,3 +157,33 @@ class Database:
                 if row is None:
                     return False
                 return bool(row["is_active"])
+
+    def get_channel_last_synced_id(self, channel_id: int) -> int | None:
+        """Retrieves the highest synced message ID for a channel."""
+        query = "SELECT last_synced_message_id FROM channels WHERE id = %(channel_id)s;"
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, {"channel_id": channel_id})
+                row = cur.fetchone()
+                if row is None:
+                    return None
+                val = row.get("last_synced_message_id")
+                return int(val) if val is not None else None
+
+    def update_channel_last_synced_id(self, channel_id: int, message_id: int) -> None:
+        """Updates the highest synced message ID for a channel."""
+        query = """
+        UPDATE channels
+        SET last_synced_message_id = GREATEST(COALESCE(last_synced_message_id, 0), %(message_id)s),
+            last_seen_at = NOW()
+        WHERE id = %(channel_id)s;
+        """
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    {
+                        "channel_id": channel_id,
+                        "message_id": message_id,
+                    },
+                )

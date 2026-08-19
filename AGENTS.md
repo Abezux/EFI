@@ -36,6 +36,8 @@ Never invent architectural decisions independently. If requirements are ambiguou
   - **ADR-0005**: Telegram session storage in environment variable.
   - **ADR-0006**: Non-semantic text-similarity clustering at V2.
   - **ADR-0007**: Google Gemini `text-embedding-004` (768-d) for semantic clustering.
+  - **ADR-0014**: Admin authentication and moderation workflow.
+  - **ADR-0015**: Bounded backfill and gap recovery strategy.
 
 ---
 
@@ -208,3 +210,15 @@ If you encounter:
 - **Mandatory Audit Trail**: Every administrative action (channel status change, event soft-takedown, event restoration, source detachment, and ambiguity queue resolution) requires a mandatory, non-empty human justification string recorded atomically in `admin_audit_log` and `processing_audit`.
 - **Ingestion Listener Gating**: The Python ingestion listener (`services/listener/`) must check `channels.is_active` and skip processing incoming messages from paused channels.
 - **Crawler Isolation**: The `/admin/` path and all administrative subroutes must remain disallowed in `robots.txt`.
+
+---
+
+## 19. V9.2 Addendum — Backfill & Gap Detection
+
+- **Checkpoint Invariant (ADR-0015)**: `channels.last_synced_message_id` tracks the highest synced Telegram message ID per channel. It must be updated atomically and greedily within the same database transaction as `insert_raw_post` using `GREATEST(COALESCE(last_synced_message_id, 0), %(telegram_message_id)s)`.
+- **Bounded Catch-Up Rule**: Backfills triggered at startup and upon reconnection must strictly enforce double bounding: `min(BACKFILL_MAX_MESSAGES, 100)` messages and messages newer than `NOW() - BACKFILL_MAX_HOURS` (48 hours).
+- **Fresh-Start Invariant**: Brand-new channels (`last_synced_message_id IS NULL`) must establish their baseline checkpoint from the current latest message without dumping historical archives.
+- **Idempotent Ingestion Reuse**: Backfilled messages must route exclusively through the existing V1 `normalize_telethon_message` and `insert_raw_post` functions, relying on `UNIQUE(channel_id, telegram_message_id)` to ensure zero duplicates.
+- **Rate-Limit Resilience**: Telethon `FloodWaitError` must be caught during backfill iterations, sleeping for the requested duration before safely resuming.
+- **Channel Error Isolation**: Backfill across channels must isolate per-channel exceptions to ensure a single channel error never aborts the listener run or prevents other channels from catching up.
+

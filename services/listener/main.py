@@ -18,6 +18,7 @@ from typing import Any, cast
 from telethon import TelegramClient, events, utils
 from telethon.sessions import StringSession
 
+from services.listener.backfill import ChannelBackfiller
 from services.listener.config import Config
 from services.listener.db import Database
 from services.listener.ingest import normalize_telethon_message
@@ -50,6 +51,7 @@ class TelegramListener:
         self.config = config
         self.db = db
         self.client: TelegramClient | None = None
+        self.backfiller: ChannelBackfiller | None = None
         self.running = False
         # Map: Telegram peer/channel ID -> Postgres channels.id
         self.channel_map: dict[int, int] = {}
@@ -65,6 +67,7 @@ class TelegramListener:
             retry_delay=self.config.reconnect_delay_seconds,
             connection_retries=self.config.max_reconnect_retries,
         )
+        self.backfiller = ChannelBackfiller(self.client, self.db, self.config)
 
     async def resolve_channels(self) -> list[Any]:
         """Resolves configured channel identifiers and syncs them with the channels table."""
@@ -294,7 +297,34 @@ class TelegramListener:
 
         self.running = True
         try:
-            await self.client.run_until_disconnected()
+            while self.running:
+                # Perform bounded backfill on startup or upon reconnecting
+                if self.backfiller and resolved_entities:
+                    try:
+                        await self.backfiller.backfill_all(self.channel_map, resolved_entities)
+                    except Exception as bf_err:
+                        log_json(
+                            "ERROR",
+                            f"Error during backfill execution: {bf_err}",
+                            extra={"error": str(bf_err)},
+                        )
+
+                try:
+                    await self.client.run_until_disconnected()
+                except (ConnectionError, OSError, TimeoutError) as conn_err:
+                    if not self.running:
+                        break
+                    log_json(
+                        "WARN",
+                        f"Telegram connection lost: {conn_err}. "
+                        f"Reconnecting in {self.config.reconnect_delay_seconds}s...",
+                        extra={"error": str(conn_err)},
+                    )
+                    await asyncio.sleep(self.config.reconnect_delay_seconds)
+                    if not self.client.is_connected():
+                        await self.client.connect()
+                else:
+                    break
         finally:
             log_json("INFO", "Telegram listener disconnected.")
 
