@@ -222,3 +222,14 @@ If you encounter:
 - **Rate-Limit Resilience**: Telethon `FloodWaitError` must be caught during backfill iterations, sleeping for the requested duration before safely resuming.
 - **Channel Error Isolation**: Backfill across channels must isolate per-channel exceptions to ensure a single channel error never aborts the listener run or prevents other channels from catching up.
 
+---
+
+## 20. V9.3 Addendum — Secrets Hardening & Database Backups
+
+- **Zero Plaintext Secrets In Non-Dev `.env` (ADR-0016)**: Secrets (`TELEGRAM_SESSION_STRING`, `TELEGRAM_API_HASH`, `GEMINI_API_KEY`, database passwords) must never be committed to git or stored in plain `.env` files beyond local dev. Containerized staging/production environments load secrets strictly via Docker Secrets (`/run/secrets/`).
+- **Seamless Application Secret Seams**: Microservices consume standard environment variables at runtime. Configuration modules (`services/listener/config.py`, `services/processor/config.go`, `services/api/config.go`) resolve secrets from `/run/secrets/` as transparent fallbacks, requiring zero application logic changes.
+- **Superseded ADR-0005**: ADR-0005's reliance on unencrypted `.env` session storage is superseded by container secret mounts (`/run/secrets/telegram_session_string`).
+- **Automated Dump & 7-Day Retention**: Database backups are taken daily using `pg_dump -Fc` custom binary format, stored in `infra/backup/storage/` off host DB data directories, and automatically pruned after 7 days (`find /backups -name "*.dump" -mtime +7 -delete`).
+- **Executable & Verified Restore Drill**: Backup and restore scripts live in `infra/backup/` (`backup.sh`, `restore.sh`, `run_restore_drill.sh`). Restore capability must be verified periodically by executing a real restore into a test database (`efi_restore_test`) and confirming 100% table row count matching against live database.
+
+

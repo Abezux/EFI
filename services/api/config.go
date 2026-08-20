@@ -34,6 +34,27 @@ func loadDotEnv() {
 	}
 }
 
+func loadDockerSecrets() {
+	secretMap := map[string]string{
+		"api_db_password":   "API_DB_PASSWORD",
+		"admin_db_password": "ADMIN_DB_PASSWORD",
+		"postgres_password": "POSTGRES_PASSWORD",
+		"session_secret":    "SESSION_SECRET",
+	}
+	for secretFile, envVar := range secretMap {
+		if os.Getenv(envVar) != "" {
+			continue
+		}
+		data, err := os.ReadFile("/run/secrets/" + secretFile)
+		if err == nil {
+			val := strings.TrimSpace(string(data))
+			if val != "" {
+				os.Setenv(envVar, val)
+			}
+		}
+	}
+}
+
 // Config encapsulates configuration parameters for the API service.
 type Config struct {
 	Port               int
@@ -51,6 +72,7 @@ type Config struct {
 // LoadConfig reads configuration from environment variables with safe defaults.
 func LoadConfig() (*Config, error) {
 	loadDotEnv()
+	loadDockerSecrets()
 
 	port := 8080
 	if val := os.Getenv("API_PORT"); val != "" {

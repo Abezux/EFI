@@ -2,6 +2,10 @@
 .env
 .env.*
 !.env.example
+infra/secrets/
+infra/backups/
+infra/backup/*.dump
+infra/backup/storage/
 *.session
 *.session-journal
 *.pem

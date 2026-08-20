@@ -35,6 +35,26 @@ func loadDotEnv() {
 	}
 }
 
+func loadDockerSecrets() {
+	secretMap := map[string]string{
+		"gemini_api_key":   "GEMINI_API_KEY",
+		"app_db_password":  "APP_DB_PASSWORD",
+		"postgres_password": "POSTGRES_PASSWORD",
+	}
+	for secretFile, envVar := range secretMap {
+		if os.Getenv(envVar) != "" {
+			continue
+		}
+		data, err := os.ReadFile("/run/secrets/" + secretFile)
+		if err == nil {
+			val := strings.TrimSpace(string(data))
+			if val != "" {
+				os.Setenv(envVar, val)
+			}
+		}
+	}
+}
+
 // Config encapsulates configuration parameters for the processor service.
 type Config struct {
 	DatabaseURL            string
@@ -59,6 +79,7 @@ type Config struct {
 // LoadConfig reads configuration from environment variables with sensible defaults.
 func LoadConfig() (*Config, error) {
 	loadDotEnv()
+	loadDockerSecrets()
 	dbURL := os.Getenv("APP_DATABASE_URL")
 	if dbURL == "" {
 		dbURL = os.Getenv("DATABASE_URL")

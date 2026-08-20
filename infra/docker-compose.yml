@@ -7,13 +7,16 @@ services:
       - ../.env
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: ${POSTGRES_DB:-efi_dev}
+    secrets:
+      - postgres_password
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ../db/migrations:/docker-entrypoint-initdb.d:ro
+      - ./backup:/backups
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-efi_dev}"]
       interval: 5s
@@ -29,6 +32,10 @@ services:
     restart: unless-stopped
     env_file:
       - ../.env
+    secrets:
+      - app_db_password
+      - telegram_api_hash
+      - telegram_session_string
     environment:
       APP_DATABASE_URL: postgres://efi_app:efi_app_pass@postgres:5432/efi_dev?sslmode=disable
     depends_on:
@@ -43,6 +50,9 @@ services:
     restart: unless-stopped
     env_file:
       - ../.env
+    secrets:
+      - app_db_password
+      - gemini_api_key
     environment:
       APP_DATABASE_URL: postgres://efi_app:efi_app_pass@postgres:5432/efi_dev?sslmode=disable
     depends_on:
@@ -57,6 +67,10 @@ services:
     restart: unless-stopped
     env_file:
       - ../.env
+    secrets:
+      - api_db_password
+      - admin_db_password
+      - session_secret
     environment:
       API_DATABASE_URL: postgres://efi_api:efi_api_pass@postgres:5432/efi_dev?sslmode=disable
       ADMIN_DATABASE_URL: postgres://efi_admin:efi_admin_pass@postgres:5432/efi_dev?sslmode=disable
@@ -85,8 +99,24 @@ services:
       api:
         condition: service_started
 
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+  app_db_password:
+    file: ./secrets/app_db_password
+  api_db_password:
+    file: ./secrets/api_db_password
+  admin_db_password:
+    file: ./secrets/admin_db_password
+  telegram_api_hash:
+    file: ./secrets/telegram_api_hash
+  telegram_session_string:
+    file: ./secrets/telegram_session_string
+  gemini_api_key:
+    file: ./secrets/gemini_api_key
+  session_secret:
+    file: ./secrets/session_secret
+
 volumes:
   postgres_data:
     driver: local
-
-

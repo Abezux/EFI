@@ -27,6 +27,30 @@ def load_dotenv(filepath: str | Path = ".env") -> None:
                 os.environ[k] = v
 
 
+def _load_docker_secrets() -> None:
+    """Read Docker secrets mounted at /run/secrets/ into os.environ if not set."""
+    secrets_dir = Path("/run/secrets")
+    if not secrets_dir.is_dir():
+        return
+
+    mapping = {
+        "telegram_api_hash": "TELEGRAM_API_HASH",
+        "telegram_session_string": "TELEGRAM_SESSION_STRING",
+        "app_db_password": "APP_DB_PASSWORD",
+        "postgres_password": "POSTGRES_PASSWORD",
+    }
+
+    for secret_name, env_var in mapping.items():
+        secret_path = secrets_dir / secret_name
+        if secret_path.is_file() and not os.environ.get(env_var):
+            try:
+                val = secret_path.read_text(encoding="utf-8").strip()
+                if val:
+                    os.environ[env_var] = val
+            except Exception:
+                pass
+
+
 @dataclass(frozen=True)
 class Config:
     database_url: str
@@ -52,6 +76,7 @@ class Config:
         """
         if env is None:
             load_dotenv()
+            _load_docker_secrets()
             environ = os.environ
         else:
             environ = env
